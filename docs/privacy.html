@@ -21,28 +21,33 @@ a{color:#4b3bd1}footer{margin-top:40px;color:#777;font-size:.85rem}
 <tr><th>구분</th><th>항목</th><th>시점</th></tr>
 <tr><td>이용자가 직접 입력</td><td>닉네임(선택), 출생연도(선택), 성별(선택), 키, 체중, 최대 심박(선택), 목표 종목과 기록, 주당 러닝 횟수, 요즘 주간 거리, 관절 부담 선호</td><td>첫 실행 화면, 설정</td></tr>
 <tr><td>삼성 헬스에서 읽음 (읽기 전용)</td><td>러닝·걷기 운동 기록(거리, 시간, 페이스, 심박, 케이던스, 구간 기록), 수면, 심박, 에너지 점수, 피부 온도</td><td>이용자가 삼성 헬스에서 권한을 허용한 경우</td></tr>
+<tr><td>신체·체성분 (선택)</td><td>체중, 키, BMI, 체지방률 (체중계·인바디 앱이 삼성 헬스 또는 Health Connect에 넣은 값). 혈압 등 의료성 정보는 읽지 않아요</td><td>이용자가 설정에서 '신체 정보 가져오기'를 눌러 권한을 허용한 경우</td></tr>
+<tr><td>Health Connect에서 읽음 (읽기 전용, 이용자가 선택·허용한 경우)</td><td>러닝·걷기 운동 기록, 심박, 속도, 거리, 걸음 수, 수면 (가민 커넥트, 삼성 헬스 등이 Health Connect에 넣은 기록)</td><td>이용자가 Health Connect에서 권한을 허용한 경우</td></tr>
+<tr><td>파일에서 가져옴 (선택)</td><td>이용자가 직접 고른 FIT·GPX·TCX 운동 파일의 러닝·걷기 기록(시간, 거리, 심박, 케이던스). 파일에 GPS 위치가 들어 있어도 거리·속도 계산에만 쓰고 <b>저장하지 않아요</b></td><td>이용자가 설정에서 '파일 선택'으로 가져온 경우</td></tr>
 <tr><td>기기 기능</td><td>알림, 캘린더(훈련 일정 공유 시)</td><td>이용자가 권한을 허용한 경우</td></tr>
 </table>
-<p>삼성 헬스에는 어떤 데이터도 쓰거나 수정하거나 삭제하지 않아요.</p>
+<p>삼성 헬스와 Health Connect에는 어떤 데이터도 쓰거나 수정하거나 삭제하지 않아요. 이용자는 둘 중 하나를 데이터 소스로 고르고, 설정에서 바꿀 수 있어요.</p>
 <p>삼성 헬스는 권한 허용 화면에서 안내하듯 운동 데이터와 함께 <b>기기 ID</b>를 앱에 전달해요. 앱은 이 기기 ID를 저장하거나 사용하거나 전송하지 않아요.</p>
 
 <h2>2. 이용 목적</h2>
 <ul><li>러닝 기록 분석, 훈련 계획 생성과 조정, 피로도와 오늘 컨디션 계산</li>
+<li>체중·체지방 추이 표시, 내 정보(키·체중) 갱신, 러닝 소모 열량 추정</li>
 <li>훈련 알림, 구글 캘린더 일정 공유</li>
 <li>(선택) AI 평가</li></ul>
 <p>광고, 마케팅, 프로파일링, 분석 도구, 비정상 종료 수집 도구는 사용하지 않아요.</p>
 
 <h2>3. 저장 위치와 보관 기간</h2>
 <ul><li>모든 정보는 앱의 <b>기기 내 전용 저장 공간</b>에만 저장돼요. 기기 백업(클라우드 백업)에도 포함되지 않도록 설정했어요.</li>
-<li>설정의 <b>'내 데이터 모두 지우기'</b>를 누르거나 앱을 삭제하면 저장된 정보가 삭제돼요.</li>
+<li>파일에서 가져온 운동 기록은 설정의 <b>'가져온 기록 지우기'</b>나 <b>'내 데이터 모두 지우기'</b>로 삭제돼요.</li>
+<li>체중·체성분은 변화 이력을 보여 주려고 <b>최대 5년치</b>를 이 폰 안에 보관해요. 설정의 <b>'내 데이터 모두 지우기'</b>를 누르거나 앱을 삭제하면 저장된 정보(체중·체성분 이력 포함)가 삭제돼요.</li>
 <li>삼성 헬스와 구글 캘린더에 있는 원본 데이터는 이 앱이 지우지 않아요. 캘린더에서는 앱이 만든 훈련 일정을 추가·수정·삭제하고, 같은 기간에 이전에 같은 형식으로 등록된 훈련 일정은 새 일정으로 교체할 수 있어요.</li></ul>
 
 <h2>4. 외부 전송 (선택 기능: Claude AI 평가)</h2>
 <p>이용자가 <b>직접 Anthropic API 키를 입력해서 AI 평가를 켠 경우에만</b>, 평가나 계획 검토를 요청할 때 아래 정보가 Anthropic의 서버로 전송돼요.</p>
 <table>
 <tr><th>전송하는 것</th><th>전송하지 않는 것</th></tr>
-<tr><td>해당 러닝의 요약과 최근 러닝 이력(날짜, 거리, 페이스, 심박, 케이던스, 구간), 나이·성별·키·체중·목표·최대 심박·훈련 선호, 앱이 계산한 피로도·회복 판단·컨디션 <b>점수와 단계</b>, 훈련 계획 요약과 바뀐 이유, 걷기 합계 요약</td>
-<td>닉네임, 수면 시간·야간 심박·에너지 점수·피부 온도 같은 건강 데이터의 <b>원래 수치</b></td></tr>
+<tr><td>해당 러닝의 요약과 최근 러닝 이력(날짜, 거리, 페이스, 심박, 케이던스, 구간), 나이·성별·키·체중·목표·최대 심박·훈련 선호, 앱이 계산한 피로도·회복 판단·컨디션 <b>점수와 단계</b>, 훈련 계획 요약과 바뀐 이유, 걷기 합계 요약, 그리고 설정에서 <b>따로 켠 경우에만</b> 최근 몇 주 체중 변화량(예: 8주 -2.1kg)</td>
+<td>닉네임, 수면 시간·야간 심박·에너지 점수·피부 온도 같은 건강 데이터의 <b>원래 수치</b>, 체지방·BMI 같은 체성분 수치 (체중 측정값이 들어오면 내 정보의 키·체중이 자동으로 갱신되고, 갱신된 키·체중은 위의 기본 정보로 전송돼요. 자동 갱신은 설정에서 끌 수 있어요)</td></tr>
 </table>
 <ul><li>API 키는 이용자의 기기에만 저장되고 Anthropic 인증에만 쓰여요. 사용 요금은 이용자의 Anthropic 계정에 부과돼요.</li>
 <li>Anthropic의 정보 처리는 Anthropic의 개인정보 처리방침(<a href="https://www.anthropic.com/legal/privacy">https://www.anthropic.com/legal/privacy</a>)을 따라요.</li>
@@ -52,7 +57,7 @@ a{color:#4b3bd1}footer{margin-top:40px;color:#777;font-size:.85rem}
 <p>운영자는 이용자의 정보를 수집하지 않으므로 제3자에게 제공하지 않아요. 위 4번의 전송은 이용자가 직접 켠 기능에서 이용자의 키로 이루어지는 전송이에요.</p>
 
 <h2>6. 이용자의 권리와 선택</h2>
-<ul><li>삼성 헬스, 알림, 캘린더 권한은 폰 설정에서 언제든 철회할 수 있어요. 철회하면 해당 기능은 쓸 수 없고 나머지는 계속 동작해요.</li>
+<ul><li>삼성 헬스, Health Connect, 알림, 캘린더 권한은 폰 설정에서 언제든 철회할 수 있어요. 철회하면 해당 기능은 쓸 수 없고 나머지는 계속 동작해요.</li>
 <li>앱 안에서 내 정보를 수정하거나 모든 데이터를 삭제할 수 있어요.</li></ul>
 
 <h2>7. 의료 면책</h2>
@@ -65,7 +70,7 @@ a{color:#4b3bd1}footer{margin-top:40px;color:#777;font-size:.85rem}
 <p>방침이 바뀌면 이 페이지의 시행일을 고치고, 중요한 변경은 앱 안에서도 알려요.</p>
 
 <h2>English summary</h2>
-<p>RunCoach is an Android running coach that reads running/walking sessions and a few recovery signals (sleep, heart rate, energy score, skin temperature) from Samsung Health, read-only, after the user grants permission. Everything the user enters and everything the app reads is stored and processed only on the user's device; the developer operates no server and collects no data. The app contains no ads, analytics or crash-reporting SDKs. If, and only if, the user enters their own Anthropic API key, a summary of a run, recent run history, profile basics (age, sex, height, weight, goal, max heart rate) and app-computed scores are sent to Anthropic when the user requests an AI evaluation; nickname and raw sleep/heart-rate/energy-score/skin-temperature values are not sent. Samsung Health passes a device ID along with exercise data, as its permission screen states; the app does not store, use or transmit it. Users can revoke permissions at any time and delete all local data in Settings or by uninstalling. The app is a general fitness guide, not a medical device, and is intended for users aged 18 and over. Contact: <a href="mailto:jihoon0501@gmail.com">jihoon0501@gmail.com</a>.</p>
+<p>RunCoach is an Android running coach that reads running/walking sessions and a few recovery signals (sleep, heart rate, energy score, skin temperature) from Samsung Health or Google Health Connect (the user chooses one), read-only, after the user grants permission. Health Connect permissions requested: exercise, heart rate, speed, distance, steps and sleep, plus history access. Everything the user enters and everything the app reads is stored and processed only on the user's device; the developer operates no server and collects no data. Optionally, the user can import body measurements (weight, height, BMI, body fat) from Samsung Health or Health Connect, for trend display, profile updates and run calorie estimates; blood pressure and other medical readings are not read. Users can also import running/walking sessions from FIT, GPX or TCX files they choose themselves; the files are parsed on the device only and any GPS coordinates inside are used just to compute distance and speed and are not stored. The app contains no ads, analytics or crash-reporting SDKs. If, and only if, the user enters their own Anthropic API key, a summary of a run, recent run history, profile basics (age, sex, height, weight, goal, max heart rate) and app-computed scores are sent to Anthropic when the user requests an AI evaluation; nickname and raw sleep/heart-rate/energy-score/skin-temperature values are not sent. Only if the user separately turns on a setting, the change in body weight over recent weeks (for example, -2.1 kg over 8 weeks) is also sent; body fat and BMI values are never sent. Samsung Health passes a device ID along with exercise data, as its permission screen states; the app does not store, use or transmit it. Users can revoke permissions at any time and delete all local data in Settings or by uninstalling. The app is a general fitness guide, not a medical device, and is intended for users aged 18 and over. Contact: <a href="mailto:jihoon0501@gmail.com">jihoon0501@gmail.com</a>.</p>
 
 <footer>RunCoach · 개인정보처리방침 · 시행일 2026-11-02</footer>
 </body></html>
