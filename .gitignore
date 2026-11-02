@@ -1,0 +1,30 @@
+# Android Studio / Gradle
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+*/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# 서명 키와 비밀 정보 (절대 올리지 마세요)
+*.jks
+*.keystore
+keystore.properties
+release-keystore*
+
+# 삼성 헬스 Data SDK (약관 동의 후 받은 파일이라 재배포 금지)
+app/libs/*.aar
+libs/*.aar
+samsung-health-data-sdk*.zip
+
+# 내 삼성 헬스 내보내기 데이터 (개인 건강 정보)
+RunLog_data/
+com.samsung.*
