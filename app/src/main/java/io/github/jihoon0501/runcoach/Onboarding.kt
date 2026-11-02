@@ -370,7 +370,7 @@ fun OnboardingScreen(prefs: Prefs, samsung: SamsungRepo, onDone: () -> Unit) {
             ) {
                 when (step) {
                     0 -> {
-                        Text("RunLog에 오신 걸 환영해요 👋", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
+                        Text("RunCoach에 오신 걸 환영해요 👋", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
                         Text(
                             "삼성 헬스의 러닝 기록과 수면·심박 같은 건강 신호를 함께 보고, 내 몸 상태에 맞는 훈련 계획과 피드백을 만들어 드려요.",
                             fontSize = 13.sp, color = RunColors.TextDim, lineHeight = 19.sp,
@@ -381,7 +381,7 @@ fun OnboardingScreen(prefs: Prefs, samsung: SamsungRepo, onDone: () -> Unit) {
                             listOf(
                                 "내 정보와 건강 데이터는 이 폰 안에서만 저장하고 계산해요. 서버로 보내지 않아요.",
                                 "읽는 데이터: 러닝·걷기 기록, 수면, 심박, 에너지 점수, 피부 온도 (모두 읽기만 하고 수정하지 않아요).",
-                                "Claude API 키를 직접 입력해서 AI 평가를 켜면, 그때만 러닝 기록 요약이 Anthropic 서버로 전송돼요. 이름은 보내지 않고, 사용량만큼 본인에게 요금이 부과돼요.",
+                                "Claude API 키를 직접 입력해서 AI 평가를 켜면, 그때만 러닝 기록 요약·최근 이력과 나이·키·체중·목표 같은 기본 정보가 Anthropic 서버로 전송돼요. 이름과 수면·심박 같은 건강 수치는 보내지 않고, 사용량만큼 본인에게 요금이 부과돼요.",
                                 "이 앱은 일반적인 운동 가이드이고 의료 조언이 아니에요. 가슴 통증, 어지러움, 비정상적인 심박이 있으면 훈련보다 전문가 상담이 먼저예요.",
                                 "각 권한은 다음 단계에서 하나씩 설명하고 허용 여부를 직접 고르게 해요.",
                             ).forEach { Text("•  $it", fontSize = 12.sp, color = Color.White.copy(alpha = 0.85f), lineHeight = 18.sp) }
@@ -502,7 +502,7 @@ fun OnboardingScreen(prefs: Prefs, samsung: SamsungRepo, onDone: () -> Unit) {
                                 colors = fieldColors(),
                             )
                             Spacer(Modifier.height(6.dp))
-                            Hint("입력하면 평가할 때마다 러닝 기록 요약과 최근 이력이 Anthropic 서버로 전송되고, 사용량만큼 요금이 부과돼요. 키는 이 폰에만 저장돼요.")
+                            Hint("입력하면 평가할 때마다 러닝 기록 요약, 최근 이력, 나이·키·체중·목표 같은 기본 정보가 Anthropic 서버로 전송되고, 사용량만큼 요금이 부과돼요. 키는 이 폰에만 저장돼요.")
                         }
                         Hint("구글 캘린더 공유는 설정 탭에서 필요할 때 켤 수 있어요.")
                     }

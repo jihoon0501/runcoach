@@ -79,7 +79,7 @@ object CalendarSync {
             append("목표 %.1fkm · 목표 페이스 %s/km\n".format(item.km, formatPace(PlanEngine.targetPace(item).toDouble())))
             item.tips.forEach { append("• $it\n") }
             if (item.rescheduled) append("(날짜가 변경된 훈련이에요)\n")
-            append("\n— RunLog 앱에서 만든 일정이에요. 계획이 바뀌면 앱에서 다시 공유하면 이 일정이 같이 바뀌어요.")
+            append("\n— RunCoach 앱에서 만든 일정이에요. 계획이 바뀌면 앱에서 다시 공유하면 이 일정이 같이 바뀌어요.")
         }
         return ContentValues().apply {
             put(CalendarContract.Events.CALENDAR_ID, calendarId)

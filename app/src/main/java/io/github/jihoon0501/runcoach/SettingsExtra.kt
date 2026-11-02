@@ -143,7 +143,7 @@ fun AiSettingsCard() {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "키를 입력하면 평가할 때마다 해당 러닝 기록과 최근 이력이 Anthropic 서버로 전송돼요. " +
+            "키를 입력하면 평가할 때마다 해당 러닝 기록과 최근 이력, 나이·키·체중·목표 같은 기본 정보가 Anthropic 서버로 전송돼요. " +
                 "키는 이 폰의 앱 저장소에만 저장되고, 사용량만큼 요금이 부과돼요.",
             color = RunColors.TextDim, fontSize = 11.sp,
         )
@@ -416,7 +416,7 @@ fun ProfileCard(onSaved: () -> Unit) {
 }
 
 /** 개인정보처리방침 주소. 배포하기 전에 실제 주소로 바꿔 넣으세요 (비워 두면 링크를 숨겨요). */
-const val PRIVACY_POLICY_URL = ""
+const val PRIVACY_POLICY_URL = "https://jihoon0501.github.io/runcoach/privacy.html"
 
 /** 설정: 앱 버전, 의료 면책, 개인정보 안내 */
 @Composable
@@ -462,7 +462,7 @@ fun AboutCard() {
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "내 정보와 건강 데이터는 이 폰 안에만 저장돼요. Claude API 키를 입력한 경우에만 평가 요청 때 러닝 기록 요약이 Anthropic으로 전송돼요.",
+            "내 정보와 건강 데이터는 이 폰 안에만 저장돼요. Claude API 키를 입력한 경우에만 평가 요청 때 러닝 기록 요약과 나이·키·체중·목표 같은 기본 정보가 Anthropic으로 전송돼요.",
             color = RunColors.TextDim, fontSize = 10.sp, lineHeight = 14.sp,
         )
         if (PRIVACY_POLICY_URL.isNotBlank()) {
