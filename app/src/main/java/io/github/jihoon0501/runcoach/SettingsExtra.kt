@@ -290,6 +290,7 @@ fun ProfileCard(onSaved: () -> Unit) {
     var showEdit by remember { mutableStateOf(false) }
     var showClear by remember { mutableStateOf(false) }
     var version by remember { mutableStateOf(0) }   // 저장 후 요약 문구를 다시 그리기 위한 값
+    var anchorIso by remember { mutableStateOf(prefs.trainingStart) }
     val p = remember(version) { UserProfile.data }
 
     GlassCard(Modifier.fillMaxWidth()) {
@@ -305,8 +306,32 @@ fun ProfileCard(onSaved: () -> Unit) {
                 (if (p.maxHr > 0) "" else " (추정)"),
             color = RunColors.TextDim, fontSize = 11.sp,
         )
+        if (anchorIso.isNotBlank()) {
+            val a = java.time.LocalDate.parse(anchorIso)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "훈련 1주차 시작: ${a.monthValue}/${a.dayOfMonth}(월) · 지금은 ${PlanEngine.weekNumber(a, java.time.LocalDate.now())}주차",
+                color = RunColors.TextDim, fontSize = 11.sp,
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (anchorIso.isNotBlank()) {
+                OutlinedButton(
+                    onClick = {
+                        val a = java.time.LocalDate.parse(anchorIso)
+                        android.app.DatePickerDialog(context, { _, y, mo, d ->
+                            val monday = PlanEngine.mondayOf(java.time.LocalDate.of(y, mo + 1, d))
+                            prefs.trainingStart = monday.toString()
+                            anchorIso = monday.toString()
+                            Toast.makeText(context, "선택한 날짜가 속한 주(월요일 시작)가 1주차예요", Toast.LENGTH_SHORT).show()
+                            onSaved()
+                        }, a.year, a.monthValue - 1, a.dayOfMonth).show()
+                    },
+                    modifier = Modifier.height(34.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                ) { Text("1주차 시작일", color = RunColors.Lime, fontSize = 12.sp) }
+            }
             OutlinedButton(
                 onClick = { showEdit = true },
                 modifier = Modifier.height(34.dp),

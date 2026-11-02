@@ -177,6 +177,10 @@ fun MainApp() {
         }
     }
 
+    /** 훈련 1주차가 시작된 월요일 (아직 정해지지 않았으면 null) */
+    fun trainingAnchor(): LocalDate? =
+        prefs.trainingStart.takeIf { it.isNotBlank() }?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+
     /** 목표 기록을 입력하지 않았다면, 최근 기록으로 기준 페이스를 정한다 */
     fun refreshAutoGoal(list: List<RunSession>) {
         if (UserProfile.data.goalTimeSec <= 0) UserProfile.autoGoalPace = PlanEngine.autoGoalPace(list, today)
@@ -227,7 +231,8 @@ fun MainApp() {
                 }
                 // 앞으로 남은 계획이 없으면 최근 기록으로 새 한 달 계획을 만든다
                 if (plan.none { it.date >= today }) {
-                    val upd = PlanEngine.replan(loaded, plan, today, currentReadiness(loaded), walks)
+                    val upd = PlanEngine.replan(loaded, plan, today, currentReadiness(loaded), walks, trainingAnchor())
+                    if (prefs.trainingStart.isBlank()) prefs.trainingStart = upd.anchor.toString()
                     savePlan(upd.newPlan)
                     planNote = upd.note
                     prefs.savePlanNote(upd.note)
@@ -286,13 +291,15 @@ fun MainApp() {
     }
     val onRefresh: () -> Unit = { sync() }
     val onReschedule: (PlanItem, LocalDate) -> Unit = { item, d ->
-        val newPlan = plan.map { if (it.id == item.id) it.copy(date = d, rescheduled = true) else it }.sortedBy { it.date }
+        val moved = plan.map { if (it.id == item.id) it.copy(date = d, rescheduled = true) else it }.sortedBy { it.date }
+        val newPlan = PlanEngine.relabelWeeks(moved, trainingAnchor() ?: PlanEngine.mondayOf(moved.minOf { it.date }))
         savePlan(newPlan)
         if (prefs.calendarAuto) shareToCalendar(newPlan)
     }
     /** 최근 기록과 피로도를 반영해 계획을 새로 만들고, 왜 바꿨는지 설명창을 띄운다 */
     val onRegenerate: () -> Unit = {
-        val upd = PlanEngine.replan(runs, plan, today, readiness, walks)
+        val upd = PlanEngine.replan(runs, plan, today, readiness, walks, trainingAnchor())
+        if (prefs.trainingStart.isBlank()) prefs.trainingStart = upd.anchor.toString()
         savePlan(upd.newPlan)
         planNote = upd.note
         prefs.savePlanNote(upd.note)
@@ -314,6 +321,14 @@ fun MainApp() {
     }
 
     LaunchedEffect(Unit) {
+        // 이전 버전에서 쓰던 계획이 있으면, 그 계획의 첫 주를 '훈련 1주차'로 정하고 모든 훈련의 주차를 한 기준으로 맞춘다
+        if (prefs.trainingStart.isBlank() && plan.isNotEmpty()) {
+            prefs.trainingStart = PlanEngine.mondayOf(plan.minOf { it.date }).toString()
+        }
+        trainingAnchor()?.let { a ->
+            val relabeled = PlanEngine.relabelWeeks(plan, a)
+            if (relabeled != plan) savePlan(relabeled)
+        }
         // 첫 실행이거나, 저장된 계획에서 겹친 id를 정리했다면 다시 저장 (알림도 이 계획을 읽는다)
         val savedPlan = prefs.loadPlan()
         if (savedPlan == null || savedPlan.map { it.id }.toSet() != plan.map { it.id }.toSet()) prefs.savePlan(plan)
@@ -384,7 +399,10 @@ fun MainApp() {
                         lastSyncText = lastSyncText,
                         onFullReload = { sync(true) },
                         onShareCalendar = { shareToCalendar(plan) },
-                        onProfileSaved = { profileVersion++ },
+                        onProfileSaved = {
+                            trainingAnchor()?.let { a -> savePlan(PlanEngine.relabelWeeks(plan, a)) }
+                            profileVersion++
+                        },
                     )
                 }
             }

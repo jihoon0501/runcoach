@@ -2,6 +2,7 @@ package io.github.jihoon0501.runcoach
 
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.temporal.ChronoUnit
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -123,7 +124,7 @@ data class PlanNote(
     val reasons: List<String>,     // 바꾼 이유
 )
 
-class PlanUpdate(val newPlan: List<PlanItem>, val note: PlanNote)
+class PlanUpdate(val newPlan: List<PlanItem>, val note: PlanNote, val anchor: LocalDate)
 
 /** 하루 동안의 걷기 합계. recovery=true면 '회복 걷기'로 본다 (30분 이상이고 평균 심박이 낮을 때) */
 class WalkDay(val date: LocalDate, val minutes: Int, val km: Double, val avgHr: Int?, val recovery: Boolean)
@@ -470,6 +471,32 @@ object PlanEngine {
         return round5(best * 0.97)
     }
 
+    // ───────────── 훈련 주차 (처음 시작한 주부터 계속 누적) ─────────────
+
+    fun mondayOf(d: LocalDate): LocalDate = d.minusDays((d.dayOfWeek.value - 1).toLong())
+
+    /** [anchorMonday]가 속한 주를 1주차로 센 [date]의 주차. 1보다 작으면 시작 전이에요. */
+    fun weekNumber(anchorMonday: LocalDate, date: LocalDate): Int =
+        (ChronoUnit.WEEKS.between(anchorMonday, mondayOf(date)) + 1).toInt()
+
+    /** 예: "12주차 · 상승" (단계 이름이 없으면 "12주차") */
+    fun weekLabel(anchorMonday: LocalDate, date: LocalDate, phase: String?): String {
+        val n = weekNumber(anchorMonday, date)
+        val head = if (n >= 1) "${n}주차" else "시작 전"
+        return if (phase.isNullOrBlank()) head else "$head · $phase"
+    }
+
+    /**
+     * 모든 훈련의 주차 문구를 날짜 기준으로 다시 붙인다. 같은 주에 단계 이름이 여러 개면 가장 최근 훈련의 이름을 쓴다.
+     * 새 계획을 만들어도, 날짜를 옮겨도, 시작일을 바꿔도 주차는 한 가지 기준(처음 시작한 주)으로 이어진다.
+     */
+    fun relabelWeeks(plan: List<PlanItem>, anchorMonday: LocalDate): List<PlanItem> {
+        val phaseOf = plan.sortedBy { it.date }.groupBy { mondayOf(it.date) }.mapValues { (_, items) ->
+            items.mapNotNull { p -> p.week.substringAfter("·", "").trim().ifEmpty { null } }.lastOrNull()
+        }
+        return plan.map { p -> p.copy(week = weekLabel(anchorMonday, p.date, phaseOf[mondayOf(p.date)])) }
+    }
+
     private fun isHard(r: RunSession): Boolean {
         val pace = r.paceSecPerKm
         return r.distanceKm >= 4.0 && ((r.avgHr ?: 0) >= UserProfile.HARD_HR || (pace > 0 && pace <= UserProfile.GOAL_10K_PACE + 25.0))
@@ -520,7 +547,7 @@ object PlanEngine {
      * 최근 러닝(거리·강도·연속일)으로 피로도를 계산하고, 그에 맞춰 앞으로 4주 계획을 새로 만든다.
      * 지나간 계획은 그대로 두고, 오늘(또는 내일)부터의 계획만 바꾼다. 왜 바꿨는지는 [PlanUpdate.note]에 담긴다.
      */
-    fun replan(runs: List<RunSession>, oldPlan: List<PlanItem>, today: LocalDate, readiness: Readiness? = null, walks: List<WalkSession> = emptyList()): PlanUpdate {
+    fun replan(runs: List<RunSession>, oldPlan: List<PlanItem>, today: LocalDate, readiness: Readiness? = null, walks: List<WalkSession> = emptyList(), anchor: LocalDate? = null): PlanUpdate {
         val sorted = runs.filter { it.date <= today }.sortedBy { it.start }
         val ranToday = sorted.any { it.date == today }
         val last7 = sorted.filter { it.date >= today.minusDays(6) }
@@ -633,7 +660,8 @@ object PlanEngine {
         // 이지런 한 번의 거리 범위 (평소 주간 거리의 약 13~28%)
         val minEasy = maxOf(2.0, base * 0.13)
         val maxEasy = maxOf(minEasy + 1.0, base * 0.28)
-        val labels = arrayOf("1주차 · 재적응", "2주차 · 재개", "3주차 · 상승", "4주차 · 점검")
+        val phases = arrayOf("재적응", "재개", "상승", "점검")
+        val anchorUsed = anchor ?: firstMonday   // 처음 만드는 계획이면 이 계획의 첫 주가 1주차
 
         // 첫 주가 이번 주라면 이미 달린 거리는 목표에서 뺀다
         val alreadyThisWeek = sorted.filter { it.date >= firstMonday }.sumOf { it.distanceKm }
@@ -641,7 +669,7 @@ object PlanEngine {
         val weekTargets = DoubleArray(4)
         for (w in 0 until 4) {
             val monday = firstMonday.plusDays(7L * w)
-            val label = labels[w]
+            val label = weekLabel(anchorUsed, monday, phases[w])
             val target = if (w == 0) (base * mult[0] - alreadyThisWeek).coerceAtLeast(base * 0.25) else base * mult[w]
             weekTargets[w] = target
             val isTest = w == 3
@@ -772,7 +800,7 @@ object PlanEngine {
         }
         val futureAll = (pinned + generated).sortedBy { it.date }
         val kept = oldPlan.filter { it.date < earliest }
-        val newPlan = dedupeIds(kept + futureAll)
+        val newPlan = relabelWeeks(dedupeIds(kept + futureAll), anchorUsed)
 
         // ── 바뀐 점 (오늘/내일부터 14일, 날짜별 비교) ──
         val changes = mutableListOf<String>()
@@ -828,9 +856,9 @@ object PlanEngine {
         if (acwr >= 1.3) {
             reasons += "부하가 급하게 올랐어요. 최근 7일 ${"%.0f".format(acute)}km는 평소(주 ${"%.0f".format(chronic)}km)의 ${pctText(acwr)}예요. " +
                 "평소의 130%를 넘는 급증은 무릎·정강이 부상이 늘어나는 구간이고, " + (if (UserProfile.bmi >= 25.0) "체중 ${UserProfile.WEIGHT_KG}kg이면 착지 충격도 커서 " else "") +
-                "1주차 거리를 평소의 ${pctText(mult[0])}인 ${w1}km로 낮췄어요."
+                "첫 주 거리를 평소의 ${pctText(mult[0])}인 ${w1}km로 낮췄어요."
         } else if (acwr >= 1.15) {
-            reasons += "최근 7일 부하가 평소의 ${pctText(acwr)}로 올라가는 중이에요. 급증 직전이라 1주차를 평소의 ${pctText(mult[0])}(${w1}km)로 조절했어요."
+            reasons += "최근 7일 부하가 평소의 ${pctText(acwr)}로 올라가는 중이에요. 급증 직전이라 첫 주를 평소의 ${pctText(mult[0])}(${w1}km)로 조절했어요."
         } else {
             reasons += "최근 7일 부하(${"%.0f".format(acute)}km)가 평소 범위(주 ${"%.0f".format(chronic)}km) 안이에요. 주간 거리는 평소 대비 ${pctText(mult[0])}로 시작해 서서히 늘려요."
         }
@@ -840,8 +868,8 @@ object PlanEngine {
                 "${restDays}일은 쉬고 ${dayLabel(firstRun)}부터 이지런으로 다시 시작해요."
         }
         if (eff != "낮음") {
-            reasons += "1주차에는 인터벌·템포를 넣지 않고 이지런과 가벼운 스트라이드로 몸을 적응시켜요. 2주차에 인터벌(${if (eff == "높음") 4 else 5}회)로 재개하고, " +
-                "3주차 템포, 4주차에는 인터벌을 줄이고 10K 기록으로 회복 상태를 점검해요."
+            reasons += "이번 계획의 첫 주에는 인터벌·템포를 넣지 않고 이지런과 가벼운 스트라이드로 몸을 적응시켜요. 둘째 주에 인터벌(${if (eff == "높음") 4 else 5}회)로 재개하고, " +
+                "셋째 주 템포, 넷째 주에는 인터벌을 줄이고 10K 기록으로 회복 상태를 점검해요."
         }
         if (longRecent >= 10 || eff != "낮음") {
             reasons += "최근 긴 거리를 달렸기 때문에 롱런은 ${longArr[0]}km로 줄이고, 이후 ${longArr[1]} → ${longArr[2]}km로 천천히 올려요. 한 번에 1~2km씩만 늘리는 게 무릎에 안전해요."
@@ -875,6 +903,6 @@ object PlanEngine {
             changes = changes.take(10),
             reasons = reasons,
         )
-        return PlanUpdate(newPlan, note)
+        return PlanUpdate(newPlan, note, anchorUsed)
     }
 }

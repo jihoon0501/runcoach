@@ -270,7 +270,8 @@ object AiCoach {
             append("[사용자]\n")
             append(UserProfile.promptSummary())
             append("[앱이 계산한 피로도] ${note.score}/100 (${note.level})\n")
-            append("[근거]\n"); note.facts.forEach { append("- $it\n") }
+            // 컨디션 줄에는 수면 시간·야간 심박 같은 수치가 들어 있어서, AI에는 점수와 단계만 보낸다
+            append("[근거]\n"); note.facts.map { if (it.startsWith("오늘 컨디션")) it.substringBefore(" · ") else it }.forEach { append("- $it\n") }
             append("[계획에서 바꾼 점]\n"); note.changes.forEach { append("- $it\n") }
             append("[바꾼 이유]\n"); note.reasons.forEach { append("- $it\n") }
             append("\n[요청]\n이 조정이 타당한지 코치로서 짧게 검토해 주세요. 동의하는 점 1~2개, 더 조심할 점 2~3개, ")

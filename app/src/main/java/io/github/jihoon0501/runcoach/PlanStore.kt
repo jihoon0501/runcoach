@@ -212,4 +212,9 @@ class Prefs(context: Context) {
     fun clearAll() {
         sp.edit().clear().apply()
     }
+
+    /** 훈련 1주차가 시작된 월요일 (ISO 날짜). 비어 있으면 아직 정해지지 않은 상태 */
+    var trainingStart: String
+        get() = sp.getString("training_start", "") ?: ""
+        set(v) = sp.edit().putString("training_start", v).apply()
 }
