@@ -36,7 +36,7 @@ data class DayHealth(
  * 삼성 헬스에서 수면, 심박, 에너지 점수, 피부 온도를 읽어 하루 단위 요약으로 만들고 폰에 저장한다.
  * 처음엔 최근 35일을 읽고, 이후에는 마지막 동기화 3일 전부터만 다시 읽어서 합친다.
  */
-class HealthDaily(context: Context) {
+class HealthDaily(context: Context, private val source: String = DataSourceKind.SAMSUNG) {
 
     companion object {
         const val CACHE_VERSION = 1
@@ -64,7 +64,10 @@ class HealthDaily(context: Context) {
     }
 
     /** 필요한 4가지 읽기 권한이 모두 허용돼 있는지 */
-    suspend fun hasPermission(): Boolean = store.getGrantedPermissions(perms).size >= perms.size
+    suspend fun hasPermission(): Boolean {
+        if (source == DataSourceKind.HEALTH_CONNECT) return HealthConnectRepo(appContext).hasHealthPermission()
+        return store.getGrantedPermissions(perms).size >= perms.size
+    }
 
     private suspend fun readAll(maxPoints: Int, make: (String?) -> ReadDataRequest<HealthDataPoint>): List<HealthDataPoint> {
         val out = mutableListOf<HealthDataPoint>()
@@ -81,6 +84,7 @@ class HealthDaily(context: Context) {
 
     /** [startDate]~[endDate] 날짜별 요약을 읽는다 */
     suspend fun fetch(startDate: LocalDate, endDate: LocalDate): List<DayHealth> {
+        if (source == DataSourceKind.HEALTH_CONNECT) return HealthConnectRepo(appContext).fetchDays(startDate, endDate)
         val zone = ZoneId.systemDefault()
         // 전날 정오부터 읽어서, 밤에 시작한 수면이 빠지지 않게 한다
         val from = startDate.minusDays(1).atTime(12, 0).atZone(zone).toInstant()

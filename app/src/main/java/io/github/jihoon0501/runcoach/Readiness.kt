@@ -51,7 +51,10 @@ class Readiness(
     val suggestion: String,         // 오늘 훈련에 대한 제안
     val parts: List<ReadinessPart>,
     val used: Int,                  // 쓴 건강 신호 수 (최대 4)
-)
+) {
+    /** 건강 신호(수면·에너지·야간 심박·피부 온도)의 감점 합. 러닝 부하는 뺀다. 계획의 피로도 가산점은 이 값만 본다 */
+    val healthPenalty: Int get() = FatigueMath.healthPenalty(parts.map { it.name to it.penalty })
+}
 
 /**
  * 건강 신호(수면, 에너지 점수, 야간 심박, 피부 온도)를 '내 최근 2주 기준'과 비교하고
@@ -155,19 +158,15 @@ object ReadinessEngine {
         // 러닝 부하: 최근 7일 거리, 강한 러닝, 장거리가 반영된 피로도
         val loadPen = (runFatigue * 0.25).roundToInt()
         parts += ReadinessPart(
-            "러닝 부하", "피로도 $runFatigue/100", loadPen,
+            FatigueMath.LOAD_PART, "러닝 피로도 $runFatigue/100", loadPen,
             if (loadPen >= 8) "최근 러닝 부하가 높아요" else "",
         )
 
         // 걷기는 러닝 부하에 환산해서 이미 반영돼 있고, 여기서는 참고용으로만 보여준다 (감점 없음)
-        if (walkInfo != null) parts += ReadinessPart("걷기(7일)", walkInfo, 0, "")
+        if (walkInfo != null) parts += ReadinessPart(FatigueMath.WALK_PART, walkInfo, 0, "")
 
         val score = (100 - parts.sumOf { it.penalty }).coerceIn(0, 100)
-        val level = when {
-            score >= 75 -> "좋음"
-            score >= 55 -> "보통"
-            else -> "낮음"
-        }
+        val level = FatigueMath.readinessLevel(score)
         val top = parts.filter { it.penalty >= 4 }.sortedByDescending { it.penalty }.take(2).map { it.reason }
         val headline = if (top.isEmpty()) "수면·심박·에너지가 평소 범위예요" else top.joinToString(" · ")
         return Readiness(cur.date, score, level, headline, suggestion(level, plan), parts, used)
@@ -224,7 +223,7 @@ fun ReadinessCard(r: Readiness, onClick: () -> Unit) {
 }
 
 @Composable
-fun ReadinessDialog(r: Readiness, onDismiss: () -> Unit) {
+fun ReadinessDialog(r: Readiness, bodyNote: String? = null, onDismiss: () -> Unit) {
     val c = readinessColor(r.level)
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -249,6 +248,19 @@ fun ReadinessDialog(r: Readiness, onDismiss: () -> Unit) {
                 Text(r.headline, fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
                 Text("➡ ${r.suggestion}", fontSize = 11.sp, color = c, lineHeight = 16.sp)
+                if (bodyNote != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("참고", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Spacer(Modifier.height(2.dp))
+                    Text(bodyNote, fontSize = 11.sp, color = RunColors.TextDim, lineHeight = 16.sp)
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "컨디션 = 100점 − 건강 신호 감점 − 러닝 부하 감점(러닝 피로도의 25%)이에요. 높을수록 좋아요. " +
+                        "계획 탭의 '피로도'는 러닝 기록의 부하에 건강 신호 가산점을 더한 값이라 방향이 반대예요(높을수록 피곤).",
+                    fontSize = 10.sp, color = RunColors.TextDim, lineHeight = 15.sp,
+                )
 
                 Spacer(Modifier.height(12.dp))
                 Text("무엇을 봤나요?", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)

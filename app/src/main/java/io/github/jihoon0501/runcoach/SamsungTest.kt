@@ -43,12 +43,15 @@ import java.time.Duration
 import java.time.Instant
 
 /** 삼성 헬스 Data SDK로 운동 세션을 직접 읽는다 (삼성 헬스 개발자 모드 필요) */
-class SamsungRepo(private val context: Context) {
+class SamsungRepo(private val context: Context) : RunSource {
 
     private val store: HealthDataStore by lazy { HealthDataService.getStore(context) }
-    private val permissions = setOf(Permission.of(DataTypes.EXERCISE, AccessType.READ))
+    private val permissions = setOf(
+        Permission.of(DataTypes.EXERCISE,          AccessType.READ),
+        Permission.of(DataTypes.EXERCISE_LOCATION, AccessType.READ),  // GPS 경로
+    )
 
-    suspend fun hasPermission(): Boolean =
+    override suspend fun hasPermission(): Boolean =
         store.getGrantedPermissions(permissions).containsAll(permissions)
 
     suspend fun requestPermission(activity: Activity): Boolean =
@@ -65,10 +68,21 @@ class SamsungRepo(private val context: Context) {
      * [start]~[end] 사이의 러닝 세션과 걷기 요약을 읽는다.
      * 러닝은 분석을 위해 세션 전체를 들고 있고, 걷기는 읽자마자 요약만 남겨서 메모리를 아낀다.
      */
+    /**
+     * ExerciseSession을 읽고 각 세션의 GPS 경로(ExerciseLocation)를 함께 가져온다.
+     * readAssociatedData: ExerciseType + ExerciseLocationType 조합으로 한 번에 읽음.
+     * GPS 경로가 포함된 세션은 route 필드가 채워진다.
+     */
     private suspend fun readSessions(start: Instant, end: Instant): Pair<List<ExerciseSession>, List<WalkSession>> {
         val runs = mutableListOf<ExerciseSession>()
         val walks = mutableListOf<WalkSession>()
         var token: String? = null
+
+        // EXERCISE_LOCATION 권한이 허용되면 ExerciseSession.route에 GPS가 자동으로 채워짐
+        // 별도 연관 읽기 불필요 — toRunSession()에서 s.route 직접 사용
+        val routeMap = emptyMap<Long, List<com.samsung.android.sdk.health.data.data.entries.ExerciseLocation>>()
+
+        // 2단계: ExerciseSession 읽기 (기존 방식)
         do {
             val builder = DataTypes.EXERCISE.readDataRequestBuilder
                 .setInstantTimeFilter(InstantTimeFilter.of(start, end))
@@ -78,6 +92,8 @@ class SamsungRepo(private val context: Context) {
             val resp = store.readData(builder.build())
             for (point in resp.dataList) {
                 point.getValue(DataType.ExerciseType.SESSIONS)?.forEach { sess ->
+                    // routeMap에서 GPS 경로를 찾아 세션에 주입할 수 없으므로
+                    // toRunSessionWithRoute()에서 처리
                     when (sess.exerciseType) {
                         DataType.ExerciseType.PredefinedExerciseType.RUNNING,
                         DataType.ExerciseType.PredefinedExerciseType.TRACK_RUNNING -> runs += sess
@@ -88,18 +104,24 @@ class SamsungRepo(private val context: Context) {
             }
             token = resp.pageToken
         } while (!token.isNullOrEmpty())
+
+        // routeMap을 companion 로컬 캐시에 저장 — toRunSession에서 참조
+        pendingRoutes = routeMap
         return runs to walks
     }
+
+    /** readSessions에서 채워지는 GPS 경로 임시 캐시 (startTime ms → 위치 목록) */
+    private var pendingRoutes: Map<Long, List<com.samsung.android.sdk.health.data.data.entries.ExerciseLocation>> = emptyMap()
 
     /**
      * [start]~[end] 러닝과 걷기를 30일 단위로 (최근 → 과거 순) 읽는다.
      * 한 단위를 읽을 때마다 지금까지 읽은 러닝/걷기 목록을 [onChunk]로 전달한다.
      */
-    suspend fun fetchAll(
+    override suspend fun fetchAll(
         start: Instant,
         end: Instant,
-        onChunk: ((List<RunSession>, List<WalkSession>) -> Unit)? = null,
-    ): Pair<List<RunSession>, List<WalkSession>> {
+        onChunk: ((List<RunSession>, List<WalkSession>) -> Unit)?,
+    ): Pair<List<RunSession>, List<WalkSession>> = try {
         val step = Duration.ofDays(30)
         val runOut = LinkedHashMap<Long, RunSession>()
         val walkOut = LinkedHashMap<Long, WalkSession>()
@@ -117,7 +139,10 @@ class SamsungRepo(private val context: Context) {
             onChunk?.invoke(runOut.values.sortedBy { it.start }, walkOut.values.sortedBy { it.start })
             to = from
         }
-        return runOut.values.sortedBy { it.start } to walkOut.values.sortedBy { it.start }
+        runOut.values.sortedBy { it.start } to walkOut.values.sortedBy { it.start }
+    } catch (e: Throwable) {
+        // NoClassDefFoundError 등 삼성 헬스 SDK 초기화 실패
+        throw RuntimeException("삼성 헬스 SDK 오류: ${e.javaClass.simpleName}: ${e.message}", e)
     }
 
     /** 러닝만 필요할 때 */
@@ -142,168 +167,72 @@ class SamsungRepo(private val context: Context) {
         val segments: List<RunSegment>,
     )
 
-    private val emptyAnalysis = Analysis(emptyList(), 0.0, 0, null, null, emptyList())
-
-    private class Raw(var kind: SegKind, val startIdx: Int, var endIdx: Int)
-
-    private fun kindOf(v: Double): SegKind = when {
-        v < 0.5 -> SegKind.REST   // 거의 멈춤 (일시정지·신호 대기)
-        v < 1.9 -> SegKind.WALK   // 약 8'46"/km보다 느림
-        v < 2.3 -> SegKind.JOG    // 8'46" ~ 7'15"
-        else -> SegKind.RUN       // 7'15"/km보다 빠름
+    /**
+     * 로그의 속도(m/s)로 운동을 정지/걷기/조깅/달리기 구간으로 나누고, 위치에 따라 준비운동 / 본 운동 / 회복 / 마무리 역할을 붙인다.
+     * 분석은 Health Connect·파일 가져오기와 같은 [RunAnalyzer]가 한다 (인터벌의 준비운동·회복이 반복에 섞이지 않게 보정 포함).
+     * 값은 근사치(±수 초). 삼성 SDK의 운동 기록에는 시계가 정한 인터벌(랩) 정보가 없어서 속도로 추정한다.
+     */
+    private fun analyze(s: ExerciseSession): Analysis {
+        val log = s.log ?: emptyList()
+        val speed = log.mapNotNull { e -> e.speed?.let { e.timestamp.toEpochMilli() to it.toDouble() } }
+        val hr = log.mapNotNull { e -> e.heartRate?.let { e.timestamp.toEpochMilli() to it.toDouble() } }
+        val cad = log.mapNotNull { e -> e.cadence?.takeIf { it > 0f }?.let { e.timestamp.toEpochMilli() to it.toDouble() } }
+        val r = RunAnalyzer.analyze(speed, hr, cad)
+        return Analysis(r.splits, r.mainKm, r.mainSec, r.avgHr, r.cadence, r.segments)
     }
 
     /**
-     * 로그의 속도(m/s)로 운동을 정지/걷기/조깅/달리기 구간으로 나누고,
-     * 위치에 따라 준비운동 / 본 운동 / 회복 / 마무리 역할을 붙인다. 버리는 구간은 없다.
-     * 본 운동(첫 달리기 ~ 마지막 달리기) 안의 1km 구간 시간과 본 운동 시간은 '정지한 시간'을 뺀 움직인 시간이다.
-     * 값은 근사치(±수 초).
+     * 삼성 헬스 ExerciseLocation(GPS 경로)을 읽어서 RoutePoint 목록으로 변환한다.
+     * Exercise with exercise location 권한이 승인된 뒤에 사용 가능.
      */
-    private fun analyze(s: ExerciseSession): Analysis {
-        val fullLog = s.log ?: emptyList()
-        val log = fullLog.filter { it.speed != null }.sortedBy { it.timestamp }
-        val n = log.size
-        if (n < 30) return emptyAnalysis
-        val t = LongArray(n) { log[it].timestamp.toEpochMilli() }
-        val v = DoubleArray(n) { (log[it].speed ?: 0f).toDouble() }
-
-        // 심박은 속도와 다른 로그 항목에 들어 있어서 따로 모은다
-        val hrLog = fullLog.filter { it.heartRate != null }.sortedBy { it.timestamp }
-        val hrT = LongArray(hrLog.size) { hrLog[it].timestamp.toEpochMilli() }
-        val hrV = DoubleArray(hrLog.size) { (hrLog[it].heartRate ?: 0f).toDouble() }
-        fun hrAvg(from: Long, to: Long): Int? {
-            var sum = 0.0
-            var c = 0
-            for (i in hrT.indices) {
-                if (hrT[i] in from..to) {
-                    sum += hrV[i]
-                    c++
-                }
-            }
-            return if (c > 0) (sum / c).toInt() else null
-        }
-
-        // 1) 속도 평활화(±4초 평균) 후 종류 분류
-        val gaps = DoubleArray(n - 1) { (t[it + 1] - t[it]) / 1000.0 }.sorted()
-        val medDt = gaps[gaps.size / 2].coerceAtLeast(0.5)
-        val half = maxOf(1, Math.round(4.0 / medDt).toInt())   // 1초 간격이면 ±4칸, 5초 간격이면 ±1칸
-        val sm = DoubleArray(n) { i ->
-            val lo = maxOf(0, i - half)
-            val hi = minOf(n - 1, i + half)
-            var sum = 0.0
-            for (k in lo..hi) sum += v[k]
-            sum / (hi - lo + 1)
-        }
-        val kinds = Array(n) { kindOf(sm[it]) }
-
-        // 2) 같은 종류끼리 묶기
-        val raw = mutableListOf<Raw>()
-        var st = 0
-        for (i in 1..n) {
-            if (i == n || kinds[i] != kinds[st]) {
-                raw += Raw(kinds[st], st, i - 1)
-                st = i
-            }
-        }
-
-        // 3) 30초 미만의 짧은 구간은 더 긴 이웃에 흡수
-        fun dur(r: Raw): Double = (t[r.endIdx] - t[r.startIdx]) / 1000.0 + 1.0
-        while (raw.size > 1) {
-            val i = raw.indexOfFirst { dur(it) < 30.0 }
-            if (i < 0) break
-            val left = if (i > 0) raw[i - 1] else null
-            val right = if (i < raw.size - 1) raw[i + 1] else null
-            val target = when {
-                left == null -> right!!
-                right == null -> left
-                dur(left) >= dur(right) -> left
-                else -> right
-            }
-            raw[i].kind = target.kind
-            var j = 0
-            while (j < raw.size - 1) {
-                if (raw[j].kind == raw[j + 1].kind) {
-                    raw[j].endIdx = raw[j + 1].endIdx
-                    raw.removeAt(j + 1)
-                } else j++
-            }
-        }
-
-        val firstRun = raw.indexOfFirst { it.kind == SegKind.RUN }
-        val lastRun = raw.indexOfLast { it.kind == SegKind.RUN }
-        if (firstRun < 0) return emptyAnalysis
-
-        // 움직인 시간(초): 정지 구간은 뺀다
-        val mov = DoubleArray(n)
-        for (i in 1 until n) {
-            var dt = (t[i] - t[i - 1]) / 1000.0
-            if (dt > 20.0) dt = 1.0
-            mov[i] = mov[i - 1] + (if (kinds[i - 1] == SegKind.REST) 0.0 else dt)
-        }
-
-        // 4) 구간별 거리/시간/심박/케이던스
-        val tStart = t[0]
-        val segments = raw.mapIndexed { idx, r ->
-            val role = when {
-                idx < firstRun -> SegRole.WARMUP
-                idx > lastRun -> SegRole.COOLDOWN
-                r.kind == SegKind.RUN -> SegRole.MAIN
-                else -> SegRole.RECOVERY
-            }
-            val endInt = if (idx < raw.size - 1) raw[idx + 1].startIdx else r.endIdx
-            var d = 0.0
-            for (i in r.startIdx + 1..endInt) {
-                var dt = (t[i] - t[i - 1]) / 1000.0
-                if (dt > 20.0) dt = 1.0
-                d += v[i - 1] * dt
-            }
-            val cads = (r.startIdx..r.endIdx).mapNotNull { log[it].cadence?.toDouble()?.takeIf { c -> c > 0 } }
-            RunSegment(
-                role = role,
-                kind = r.kind,
-                startSec = (t[r.startIdx] - tStart) / 1000,
-                durSec = (t[endInt] - t[r.startIdx]) / 1000,
-                distanceKm = d / 1000.0,
-                avgHr = hrAvg(t[r.startIdx], t[endInt]),
-                cadence = if (cads.isNotEmpty()) cads.average().toInt() else null,
-            )
-        }
-
-        // 5) 본 운동(첫 달리기 ~ 마지막 달리기) 안의 1km 구간 (정지 시간 제외)
-        val mainStart = raw[firstRun].startIdx
-        val mainEnd = raw[lastRun].endIdx
-        var cum = 0.0
-        var next = 1000.0
-        var prevMov = mov[mainStart]
-        val splits = mutableListOf<Int>()
-        for (i in mainStart + 1..mainEnd) {
-            var dt = (t[i] - t[i - 1]) / 1000.0
-            if (dt > 20.0) dt = 1.0
-            val seg = v[i - 1] * dt
-            if (seg > 0 && cum + seg >= next) {
-                val frac = (next - cum) / seg
-                val mCross = mov[i - 1] + frac * (mov[i] - mov[i - 1])
-                splits += Math.round(mCross - prevMov).toInt()
-                prevMov = mCross
-                next += 1000.0
-            }
-            cum += seg
-        }
-
-        val range = mainStart..mainEnd
-        val cads = range.mapNotNull { log[it].cadence?.toDouble()?.takeIf { c -> c > 0 } }
-        return Analysis(
-            splits = splits,
-            mainKm = cum / 1000.0,
-            mainSec = Math.round(mov[mainEnd] - mov[mainStart]),
-            avgHr = hrAvg(t[mainStart], t[mainEnd]),
-            cadence = if (cads.isNotEmpty()) cads.average().toInt() else null,
-            segments = segments,
-        )
-    }
+    /**
+     * 삼성 헬스 SDK ExerciseLocation으로 GPS 경로를 읽는다.
+     * TODO: AssociatedReadRequest(ExerciseType + ExerciseLocationType) 방식으로 구현 예정.
+     * 현재는 빈 목록을 반환하며, GPS 경로는 Health Connect ExerciseRoute 또는
+     * FIT 파일 가져오기를 통해 채워진다.
+     */
+    // GPS 경로는 toRunSession()에서 ExerciseSession.route로 직접 읽어요.
+    // fetchRoute는 더 이상 필요하지 않지만 인터페이스 호환성을 위해 유지해요.
+    suspend fun fetchRoute(start: java.time.Instant, end: java.time.Instant): List<RoutePoint> =
+        emptyList()
 
     private fun toRunSession(s: ExerciseSession): RunSession {
         val a = analyze(s)
+        // GPS 경로: ExerciseSession.route (삼성 헬스 직접 포함) 또는 pendingRoutes (연관 읽기) 중 더 긴 것 사용
+        val sessionRoute = s.route.orEmpty()
+        val assocRoute = pendingRoutes[s.startTime.toEpochMilli()] ?: emptyList()
+        val bestRoute = if (assocRoute.size > sessionRoute.size) assocRoute else sessionRoute
+        // ExerciseLog에서 포인트별 HR·케이던스·속도 추출 (타임스탬프 기준 보간)
+        val log = s.log ?: emptyList()
+        val logHr  = log.mapNotNull { e -> e.heartRate?.let { e.timestamp.toEpochMilli() to it.toInt() } }
+        val logCad = log.mapNotNull { e -> e.cadence?.takeIf { it > 0f }?.let { e.timestamp.toEpochMilli() to it.toInt() } }
+        val logSpd = log.mapNotNull { e -> e.speed?.let { e.timestamp.toEpochMilli() to it.toDouble() } }
+
+        fun <T : Number> interpolate(series: List<Pair<Long, T>>, tsMs: Long): T? {
+            if (series.isEmpty()) return null
+            val idx = series.indexOfFirst { it.first >= tsMs }
+            return when {
+                idx == 0 -> series.first().second
+                idx < 0  -> series.last().second
+                else     -> series[idx - 1].second  // 가장 가까운 이전 값
+            }
+        }
+
+        val route = bestRoute.mapNotNull { loc ->
+            runCatching {
+                val ts = loc.timestamp.toEpochMilli()
+                RoutePoint(
+                    lat         = loc.latitude.toDouble(),
+                    lng         = loc.longitude.toDouble(),
+                    altitudeM   = loc.altitude?.toDouble() ?: 0.0,
+                    accuracyM   = loc.accuracy ?: 0f,
+                    timestampMs = ts,
+                    hr          = interpolate(logHr,  ts),
+                    cadence     = interpolate(logCad, ts),
+                    speedMps    = interpolate(logSpd, ts),
+                )
+            }.getOrNull()
+        }
         return RunSession(
             start = s.startTime,
             durationSec = s.duration.seconds,
@@ -318,6 +247,7 @@ class SamsungRepo(private val context: Context) {
             mainSec = a.mainSec,
             vo2Max = s.vo2Max,
             segments = a.segments,
+            route = route,
         )
     }
 
@@ -339,7 +269,8 @@ fun runsDiagnosticJson(runs: List<RunSession>): String {
             put("maxHr", r.maxHr ?: JSONObject.NULL)
             put("cadence", r.cadence ?: JSONObject.NULL)
             put("vo2Max", r.vo2Max ?: JSONObject.NULL)
-            put("splitsSec", JSONArray(r.splits))
+            put("routePoints", r.route.size)   // GPS 경로 포인트 수 (0이면 GPS 없음)
+             put("splitsSec", JSONArray(r.splits))
             put("segments", JSONArray(r.segments.map { g ->
                 JSONObject().apply {
                     put("label", g.label)

@@ -1,5 +1,8 @@
 package io.github.jihoon0501.runcoach
 
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -86,6 +89,7 @@ enum class SyncState { Idle, Loading, Ready, NeedPermission, Unavailable, Error 
 fun GlassCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(16.dp)
@@ -93,7 +97,9 @@ fun GlassCard(
         .clip(shape)
         .background(Color.White.copy(alpha = 0.06f))
         .border(1.dp, Color.White.copy(alpha = 0.09f), shape)
-    if (onClick != null) m = m.clickable(onClick = onClick)
+    if (onClick != null || onLongClick != null) {
+        m = m.combinedClickable(onClick = onClick ?: {}, onLongClick = onLongClick)
+    }
     Column(m.padding(horizontal = 12.dp, vertical = 10.dp), content = content)
 }
 
@@ -325,40 +331,67 @@ fun SplitBars(splits: List<Int>, modifier: Modifier = Modifier) {
     }
 }
 
-fun segColor(g: RunSegment): Color = when (g.role) {
-    SegRole.MAIN -> RunColors.Lime
-    SegRole.RECOVERY -> RunColors.Orange
-    else -> RunColors.Blue   // 준비운동 / 마무리
+/** 구간의 평균 페이스(속도)에 해당하는 색. 빠를수록 파랑 → 초록 → 라임 → 노랑 → 주황 → 분홍으로 이어진다 */
+fun segPaceColor(g: RunSegment): Color {
+    val v = if (g.durSec > 0) g.distanceKm * 1000.0 / g.durSec else 0.0
+    return Color(PaceGradient.argb(v))
 }
 
+/**
+ * 운동 구성 막대: 구간을 시간 비율로 이어 붙이고, 색은 구간의 평균 페이스에 따라 연속적으로 바뀐다.
+ * 구간 경계에서는 이웃 구간의 색과 부드럽게 섞이고, 경계에는 아주 옅은 눈금이 있다. 아래에 페이스 색 범례가 있다.
+ */
 @Composable
 fun SegmentTimeline(segments: List<RunSegment>, modifier: Modifier = Modifier) {
     if (segments.size < 2) return
+    val stops = remember(segments) {
+        PaceGradient.barStops(
+            segments.map { it.durSec },
+            segments.map { if (it.durSec > 0) it.distanceKm * 1000.0 / it.durSec else 0.0 },
+        ).map { it.first to Color(it.second) }.toTypedArray()
+    }
+    val legend = remember { PaceGradient.legendStops(8).map { it.first to Color(it.second) }.toTypedArray() }
     Column(modifier) {
         Text("운동 구성", color = RunColors.TextDim, fontSize = 10.sp)
         Spacer(Modifier.height(4.dp))
-        Row(
+        Box(
             Modifier
                 .fillMaxWidth()
-                .height(7.dp)
-                .clip(RoundedCornerShape(4.dp)),
+                .height(14.dp)
+                .clip(RoundedCornerShape(7.dp)),
         ) {
-            segments.forEach { g ->
-                Box(
-                    Modifier
-                        .weight(g.durSec.coerceAtLeast(1L).toFloat())
-                        .fillMaxHeight()
-                        .background(segColor(g))
-                )
+            Box(Modifier.matchParentSize().background(Brush.horizontalGradient(*stops)))
+            Canvas(Modifier.matchParentSize()) {
+                val total = segments.sumOf { it.durSec.coerceAtLeast(1L) }.toFloat()
+                var acc = 0L
+                segments.dropLast(1).forEach { g ->
+                    acc += g.durSec.coerceAtLeast(1L)
+                    val x = size.width * acc / total
+                    drawLine(Color.Black.copy(alpha = 0.28f), Offset(x, size.height * 0.2f), Offset(x, size.height * 0.8f), strokeWidth = 1.5f)
+                }
             }
         }
-        Spacer(Modifier.height(5.dp))
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("느림 9'00\"", color = RunColors.TextDim, fontSize = 9.sp)
+            Box(
+                Modifier
+                    .weight(1f)
+                    .padding(horizontal = 6.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Brush.horizontalGradient(*legend)),
+            )
+            Text("빠름 4'00\"", color = RunColors.TextDim, fontSize = 9.sp)
+        }
+        Text("색 = 구간 평균 페이스", color = RunColors.TextDim, fontSize = 9.sp)
+        Spacer(Modifier.height(6.dp))
         segments.forEach { g ->
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 1.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(segColor(g)))
+                Box(Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(segPaceColor(g)))
                 Spacer(Modifier.width(6.dp))
                 Text(g.label, color = Color.White, fontSize = 11.sp, modifier = Modifier.weight(1f))
                 Text(
@@ -388,10 +421,10 @@ fun ConnectCard(state: SyncState, errorMsg: String, onConnect: () -> Unit, onRef
                 }
             }
             SyncState.NeedPermission -> {
-                Text("🔗 삼성 헬스 연결", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                Text("🔗 데이터 연결", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    "러닝 기록을 읽기 전용으로 가져와요. 삼성 헬스 개발자 모드의 데이터 읽기가 켜져 있어야 해요.",
+                    "러닝 기록을 읽기 전용으로 가져와요. 삼성 헬스 또는 Health Connect 연결이 필요해요. 소스는 설정 탭에서 바꿀 수 있어요.",
                     color = RunColors.TextDim, fontSize = 11.sp,
                 )
                 Spacer(Modifier.height(8.dp))
@@ -880,9 +913,9 @@ fun HomeScreen(
 // ───────────────────────── 기록 (한 줄 요약 + 펼치기) ─────────────────────────
 
 @Composable
-fun AiEvalSection(result: AiResult?, loading: Boolean, onClick: () -> Unit) {
+fun AiEvalSection(result: AiResult?, loading: Boolean, onClick: () -> Unit, onShowRoute: (() -> Unit)? = null, hasRoute: Boolean? = null) {
     Column(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Button(
                 onClick = onClick,
                 enabled = !loading,
@@ -897,7 +930,7 @@ fun AiEvalSection(result: AiResult?, loading: Boolean, onClick: () -> Unit) {
                 Text(
                     when {
                         loading -> "분석 중..."
-                        result == null -> "🤖 AI 평가"
+                        result == null -> "✨ AI 평가"
                         else -> "다시 평가"
                     },
                     fontWeight = FontWeight.SemiBold, fontSize = 12.sp,
@@ -906,6 +939,36 @@ fun AiEvalSection(result: AiResult?, loading: Boolean, onClick: () -> Unit) {
             if (result != null) {
                 Spacer(Modifier.width(8.dp))
                 Text("평가: ${result.source}", color = RunColors.TextDim, fontSize = 10.sp)
+            }
+            // 경로 버튼 — GPS 있음: Violet 채움 / GPS 없음: 흐린 외곽선
+            if (onShowRoute != null && hasRoute != null) {
+                Spacer(Modifier.weight(1f))
+                if (hasRoute) {
+                    // GPS 있음 — 보라색 채움 버튼
+                    Button(
+                        onClick = onShowRoute,
+                        modifier = Modifier.height(32.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = RunColors.Violet,
+                            contentColor   = Color.White,
+                        ),
+                    ) {
+                        Text("↝ 경로", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
+                    // GPS 없음 — 흐린 외곽선 버튼
+                    OutlinedButton(
+                        onClick = onShowRoute,
+                        modifier = Modifier.height(32.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp, RunColors.TextDim.copy(alpha = 0.4f)
+                        ),
+                    ) {
+                        Text("↝ 경로", fontSize = 11.sp, color = RunColors.TextDim)
+                    }
+                }
             }
         }
         if (result != null) {
@@ -929,9 +992,18 @@ fun RunRow(
     result: AiResult?,
     loading: Boolean,
     onAi: () -> Unit,
+    onDelete: ((RunSession) -> Unit)? = null,
+    onEdit:   ((RunSession) -> Unit)? = null,
+    onShowRoute: ((RunSession) -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    GlassCard(Modifier.fillMaxWidth().animateContentSize(), onClick = { expanded = !expanded }) {
+    var showMenu by remember { mutableStateOf(false) }
+    Box {
+    GlassCard(
+        Modifier.fillMaxWidth().animateContentSize(),
+        onClick = { expanded = !expanded },
+        onLongClick = { if (onDelete != null || onEdit != null) showMenu = true },
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "${r.date.monthValue}/${r.date.dayOfMonth} ${korDow(r.date.dayOfWeek)}",
@@ -956,7 +1028,7 @@ fun RunRow(
             Text("${r.cadence ?: "-"}spm", fontSize = 11.sp, color = RunColors.TextDim)
             Spacer(Modifier.width(6.dp))
             Text(
-                if (result != null) "🤖" else if (expanded) "⌃" else "⌄",
+                if (result != null) "✨" else if (expanded) "⌃" else "⌄",
                 fontSize = 11.sp, color = RunColors.TextDim,
             )
         }
@@ -968,6 +1040,11 @@ fun RunRow(
                     Stat("최대 심박", r.maxHr?.toString() ?: "-")
                     Stat("케이던스", r.cadence?.toString() ?: "-")
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "소모 열량 약 ${Math.round(r.distanceKm * UserProfile.data.weightKg * 1.036)}kcal (내 체중 ${UserProfile.data.weightKg}kg 기준 추정치)",
+                    fontSize = 10.sp, color = RunColors.TextDim,
+                )
                 if (r.segments.size >= 2) {
                     Spacer(Modifier.height(8.dp))
                     SegmentTimeline(r.segments)
@@ -977,13 +1054,46 @@ fun RunRow(
                     SplitBars(r.splits)
                 }
                 Spacer(Modifier.height(8.dp))
-                AiEvalSection(result, loading, onAi)
+                AiEvalSection(result, loading, onAi, onShowRoute = onShowRoute?.let { cb -> { cb(r) } }, hasRoute = r.route.isNotEmpty())
             }
         }
     }
+    // 길게 누르면 나오는 삭제·편집 메뉴
+    DropdownMenu(
+        expanded = showMenu,
+        onDismissRequest = { showMenu = false },
+    ) {
+        if (onEdit != null) {
+            DropdownMenuItem(
+                text = { Text("✏️  편집") },
+                onClick = { showMenu = false; onEdit(r) },
+            )
+        }
+        if (onDelete != null) {
+            DropdownMenuItem(
+                text = { Text("🗑  삭제", color = RunColors.Pink) },
+                onClick = { showMenu = false; onDelete(r) },
+            )
+        }
+    }
+    } // Box
 }
 
 // ───────────────────────── 설정 ─────────────────────────
+
+@Composable
+private fun SettingsSectionHeader(title: String) {
+    Text(
+        title,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = RunColors.TextDim,
+        letterSpacing = 0.5.sp,
+        modifier = Modifier
+            .padding(start = 4.dp, top = 10.dp, bottom = 2.dp)
+            .fillMaxWidth(),
+    )
+}
 
 @Composable
 fun SettingsScreen(
@@ -996,6 +1106,7 @@ fun SettingsScreen(
     onFullReload: () -> Unit = {},
     onShareCalendar: () -> Unit = {},
     onProfileSaved: () -> Unit = {},
+    onImported: () -> Unit = {},
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
@@ -1004,50 +1115,45 @@ fun SettingsScreen(
         android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     LazyColumn(
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        item { Text("설정", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Color.White) }
-
-        item { ProfileCard(onProfileSaved) }
-
-        item { ReminderCard() }
-
-        item { AiSettingsCard() }
-
-        item { CalendarCard(onShareCalendar) }
-
-        if (isDebug) {
-            item { HealthDiagCard() }
-
-            item { SamsungTestCard() }
+        item {
+            Text("설정", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White,
+                modifier = Modifier.padding(bottom = 4.dp))
         }
 
+        // ══ 👤 내 정보 ══
+        item { SettingsSectionHeader("👤  내 정보") }
+        item { ProfileCard(onProfileSaved) }
+
+        // ══ 📡 데이터 연결 ══
+        item { SettingsSectionHeader("📡  데이터 연결") }
         item {
             GlassCard(Modifier.fillMaxWidth()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        SectionTitle("데이터 연결")
+                        SectionTitle("삼성 헬스 / Health Connect")
                         val label = when (state) {
                             SyncState.Ready -> "✅ 연결됨 · 러닝 ${runs.size}건" +
-                                (if (lastSyncText.isNotBlank()) " · 마지막 동기화 $lastSyncText" else "")
+                                (if (lastSyncText.isNotBlank()) " · $lastSyncText" else "")
                             SyncState.NeedPermission -> "⚠️ 권한 필요"
-                            SyncState.Unavailable -> "❌ 삼성 헬스 사용 불가"
-                            SyncState.Error -> "❌ 오류"
-                            else -> "⏳ 확인 중"
+                            SyncState.Unavailable    -> "❌ 삼성 헬스 사용 불가"
+                            SyncState.Error          -> "❌ 오류"
+                            else                     -> "⏳ 확인 중"
                         }
                         Text(label, color = RunColors.TextDim, fontSize = 11.sp)
                         Text(
                             "전체 다시 불러오기",
                             color = RunColors.Lime, fontSize = 10.sp,
-                            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onFullReload).padding(vertical = 3.dp),
+                            modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onFullReload),
                         )
                     }
                     Button(
                         onClick = onConnect,
                         modifier = Modifier.height(34.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = RunColors.Lime, contentColor = RunColors.Bg),
+                        colors = ButtonDefaults.buttonColors(containerColor = RunColors.Lime, contentColor = Color.Black),
                     ) { Text("권한", fontWeight = FontWeight.Bold, fontSize = 12.sp) }
                     Spacer(Modifier.width(6.dp))
                     OutlinedButton(
@@ -1058,14 +1164,36 @@ fun SettingsScreen(
                 }
             }
         }
+        item { DataSourceCard() }
+        item { ImportCard(onImported) }
 
+        // ══ 🔔 알림 ══
+        item { SettingsSectionHeader("🔔  알림") }
+        item { ReminderCard() }
+
+        // ══ ✨ AI 코치 ══
+        item { SettingsSectionHeader("✨  AI 코치") }
+        item { AiSettingsCard() }
+
+        // ══ 📅 캘린더 연동 ══
+        item { SettingsSectionHeader("📅  캘린더 연동") }
+        item { CalendarCard(onShareCalendar) }
+
+        // ══ 💾 백업 / 복원 ══
+        item { SettingsSectionHeader("💾  백업 / 복원") }
+        item { BackupRestoreCard() }
+
+        // ══ 🛠 개발자 도구 (디버그 빌드) ══
         if (isDebug) {
+            item { SettingsSectionHeader("🛠  개발자 도구") }
+            item { HealthDiagCard() }
+            item { SamsungTestCard() }
             item {
                 GlassCard(Modifier.fillMaxWidth()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             SectionTitle("데이터 진단")
-                            Text("읽힌 항목을 JSON으로 복사해 Claude 대화에 붙여넣어요.", color = RunColors.TextDim, fontSize = 10.sp)
+                            Text("읽힌 항목을 JSON으로 복사해 Claude 대화에 붙여넣어요.", color = RunColors.TextDim, fontSize = 11.sp)
                         }
                         OutlinedButton(
                             onClick = {
@@ -1078,16 +1206,16 @@ fun SettingsScreen(
                     }
                 }
             }
-
         }
 
+        // ══ ℹ️ 앱 정보 ══
+        item { SettingsSectionHeader("ℹ️  앱 정보") }
         item { AboutCard() }
-
         item {
             Text(
                 "이 앱은 읽기 전용이며 복사·AI 평가 요청 때만 데이터가 밖으로 나가요.",
                 color = RunColors.TextDim, fontSize = 10.sp,
-                modifier = Modifier.padding(horizontal = 4.dp),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
             )
         }
     }

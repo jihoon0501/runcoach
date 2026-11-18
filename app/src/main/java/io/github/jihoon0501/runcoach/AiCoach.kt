@@ -279,4 +279,195 @@ object AiCoach {
         }
         return post(apiKey, SYSTEM, prompt, 4096)
     }
+    // ───────────── 채팅 AI ─────────────────────────────────────────
+
+    private const val CHAT_SYSTEM =
+        "당신은 아마추어 러너의 개인 AI 러닝 코치입니다. " +
+        "제공된 사용자 정보·최근 기록·훈련 계획·피로도를 근거로 대화합니다. " +
+        "한국어로 친절하고 간결하게 답하세요. " +
+        "피로도가 '높음'이거나 최근 부하가 급증한 상태에서는 인터벌·템포 같은 강한 훈련을 권하지 말고 이지런이나 휴식을 권하세요. " +
+        "앱이 컨디션 때문에 낮춘 훈련이 있으면 그 이유를 존중하세요. " +
+        "사이클·근력·구기 같은 크로스 트레이닝도 피로에 반영돼 있습니다. 최근 기록을 고려하되, 하체 근력이나 구기 운동 뒤에 강한 훈련을 할지는 사용자가 정하게 하고 제안만 하세요. " +
+        "계획 변경은 '오늘' 훈련 하나만 가능합니다. 변경이 적절하다고 판단되면 응답 마지막에 반드시 다음 형식을 추가하세요:\n" +
+        "PLAN_CHANGE:{type}:{km}:{reason}\n" +
+        "type은 EASY/LONG/INTERVAL/TEMPO/TEST/REST 중 하나(TEST는 10K 기록 측정, REST는 오늘 훈련 쉬기), " +
+        "km은 숫자(REST는 0), reason은 한줄 이유. " +
+        "INTERVAL·TEMPO·TEST는 앱이 정해진 구성으로 만들어서 km은 참고로만 쓰입니다. " +
+        "계획 변경이 불필요하면 PLAN_CHANGE 줄을 쓰지 마세요. " +
+        "마크다운 기호(#, *, |, **)는 쓰지 마세요."
+
+    data class ChatMessage(val role: String, val text: String)  // role: "user" | "assistant"
+
+    data class ChatReply(
+        val text: String,          // 사용자에게 보여줄 텍스트
+        val planChange: PlanChange? = null,  // 계획 변경 제안 (있을 때만)
+    )
+
+    data class PlanChange(
+        val type: WorkoutType?,   // null이면 오늘 훈련 쉬기(REST)
+        val km: Double,
+        val reason: String,
+    )
+
+    /** 채팅 컨텍스트 — 현재 상황 요약 */
+    private fun buildChatContext(
+        runs: List<RunSession>,
+        plan: List<PlanItem>,
+        today: java.time.LocalDate,
+        fatigue: Int?,
+        cross: List<ActivitySession> = emptyList(),
+    ): String = buildString {
+        append("[사용자]\n")
+        append(UserProfile.promptSummary())
+        append("\n[오늘 날짜] $today\n")
+
+        // 오늘 계획
+        val todayPlan = plan.firstOrNull { it.date == today }
+        if (todayPlan != null) {
+            append("[오늘 계획] ${todayPlan.title} (${todayPlan.type.label}), ${todayPlan.km}km")
+            if (todayPlan.targetPace > 0)
+                append(", 목표 페이스 ${mmss(todayPlan.targetPace)}/km")
+            append("\n")
+        } else {
+            val upcoming = plan.filter { it.date >= today }.minByOrNull { it.date }
+            if (upcoming != null)
+                append("[다음 계획] ${upcoming.date} ${upcoming.title} ${upcoming.km}km\n")
+            else
+                append("[계획] 오늘 이후 계획 없음\n")
+        }
+
+        // 최근 7일 러닝
+        val recent = runs.filter { it.date >= today.minusDays(7) }.sortedByDescending { it.date }
+        if (recent.isNotEmpty()) {
+            append("\n[최근 7일 러닝]\n")
+            recent.forEach { r ->
+                append("  ${r.date.monthValue}/${r.date.dayOfMonth} ${"%.1f".format(r.distanceKm)}km " +
+                    "${mmss(r.paceSecPerKm.toInt())}/km")
+                r.avgHr?.let { append(" HR${it}") }
+                append("\n")
+            }
+        }
+
+        // 최근 4주 주간 볼륨
+        val weekKm = runs.filter { it.date >= today.minusDays(28) }.sumOf { it.distanceKm }
+        append("[최근 4주 총 거리] ${"%.0f".format(weekKm)}km (주평균 ${"%.0f".format(weekKm / 4)}km)\n")
+
+        // 피로도
+        if (fatigue != null) {
+            append("[현재 피로도] $fatigue/100 (${if (fatigue >= 70) "높음" else if (fatigue >= 45) "보통" else "낮음"})\n")
+        }
+
+        // 최근 7일 크로스 트레이닝 (피로도와 최근 부하에는 이미 반영돼 있다)
+        val recentCross = cross.filter { it.date >= today.minusDays(6) && it.date <= today }.sortedByDescending { it.start }
+        if (recentCross.isNotEmpty()) {
+            val eqKm = recentCross.sumOf { PlanEngine.crossKm(it, runs) }
+            append("[최근 7일 크로스 트레이닝] ${recentCross.size}회, 러닝 환산 +${"%.1f".format(eqKm)}km (피로도에 반영됨)\n")
+            recentCross.take(6).forEach {
+                append("  ${it.date.monthValue}/${it.date.dayOfMonth} ${it.type.label} ${it.durationMin}분")
+                if (it.distanceKm > 0) append(" ${"%.1f".format(it.distanceKm)}km")
+                if (it.sets > 0) append(" ${it.sets}세트×${it.reps}회")
+                append("\n")
+            }
+        }
+
+        // 앞으로의 계획 (오늘 이후 3개)
+        val nextItems = plan.filter { it.date > today }.sortedBy { it.date }.take(3)
+        if (nextItems.isNotEmpty()) {
+            append("[앞으로 계획] " + nextItems.joinToString(" / ") { "${it.date.monthValue}/${it.date.dayOfMonth} ${it.title}(${it.km}km)" } + "\n")
+        }
+
+        // 훈련 단계와 최근 퀄리티 훈련 수행
+        val q28 = plan.filter {
+            !it.optional && (it.type == WorkoutType.INTERVAL || it.type == WorkoutType.TEMPO) &&
+                it.date < today && it.date >= today.minusDays(28)
+        }
+        if (q28.isNotEmpty()) {
+            val qm = PlanEngine.match(q28, runs)
+            append("[지난 4주 퀄리티 훈련] ${q28.count { qm.containsKey(it.id) }}/${q28.size}회 수행\n")
+        }
+        val stageNow = plan.filter {
+            (it.type == WorkoutType.INTERVAL || it.type == WorkoutType.TEMPO) && it.date >= today
+        }.minByOrNull { it.date }?.stage
+        if (stageNow != null) append("[훈련 단계] 점진 상승 단계 $stageNow/5\n")
+
+        // 앱이 컨디션 때문에 낮춘 훈련
+        plan.filter { PlanEngine.isAdjusted(it) && it.date >= today }.forEach {
+            append("[앱이 낮춘 훈련] ${it.date.monthValue}/${it.date.dayOfMonth} ${it.title}: ${PlanEngine.adjReason(it)}\n")
+        }
+
+        // 신체 트렌드
+        UserProfile.bodyTrend?.let { append("[신체 정보] $it\n") }
+    }
+
+    /** 채팅 1턴 — history는 직전 대화 (최대 10턴) */
+    suspend fun chat(
+        apiKey: String,
+        userMessage: String,
+        history: List<ChatMessage>,
+        runs: List<RunSession>,
+        plan: List<PlanItem>,
+        today: java.time.LocalDate,
+        fatigue: Int? = null,
+        cross: List<ActivitySession> = emptyList(),
+    ): ChatReply {
+        val ctx = buildChatContext(runs, plan, today, fatigue, cross)
+        val systemPrompt = CHAT_SYSTEM + "\n\n" + ctx
+
+        // 멀티턴 messages 구성
+        val messages = JSONArray()
+        history.takeLast(10).forEach { m ->
+            messages.put(JSONObject().put("role", m.role).put("content", m.text))
+        }
+        messages.put(JSONObject().put("role", "user").put("content", userMessage))
+
+        val body = JSONObject()
+            .put("model", MODEL)
+            .put("max_tokens", 2000)
+            .put("system", systemPrompt)
+            .put("messages", messages)
+
+        val raw = withContext(Dispatchers.IO) {
+            val url = URL("https://api.anthropic.com/v1/messages")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("x-api-key", apiKey)
+            conn.setRequestProperty("anthropic-version", "2023-06-01")
+            conn.doOutput = true
+            conn.outputStream.use { it.write(body.toString().toByteArray()) }
+            if (conn.responseCode != 200) {
+                val err = conn.errorStream?.bufferedReader()?.readText() ?: ""
+                return@withContext "오류: ${conn.responseCode} $err"
+            }
+            val resp = JSONObject(conn.inputStream.bufferedReader().readText())
+            // content 배열에서 type=text 블록 찾기 (thinking 블록이 먼저 올 수 있음)
+            val content = resp.getJSONArray("content")
+            var extracted = ""
+            for (i in 0 until content.length()) {
+                val block = content.getJSONObject(i)
+                if (block.optString("type") == "text") {
+                    extracted = block.getString("text")
+                    break
+                }
+            }
+            if (extracted.isEmpty()) extracted = "죄송해요, 응답을 받지 못했어요. 다시 시도해 주세요."
+            extracted
+        }
+
+        // PLAN_CHANGE 파싱
+        val planChangeRegex = Regex("PLAN_CHANGE:(\\w+):([\\d.]+):(.+)")
+        val match = planChangeRegex.find(raw)
+        val planChange = match?.let { m ->
+            runCatching {
+                PlanChange(
+                    type = if (m.groupValues[1] == "REST") null else WorkoutType.valueOf(m.groupValues[1]),
+                    km = m.groupValues[2].toDouble(),
+                    reason = m.groupValues[3].trim(),
+                )
+            }.getOrNull()
+        }
+        val displayText = raw.replace(planChangeRegex, "").trimEnd()
+        return ChatReply(text = displayText, planChange = planChange)
+    }
+
 }

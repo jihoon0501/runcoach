@@ -1,7 +1,9 @@
 package io.github.jihoon0501.runcoach
 
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -347,6 +350,7 @@ private fun WeekHeader(g: WeekGroup) {
 }
 
 /** 한 달 분량 페이지: 월 요약 → 주차별(최근 주 먼저) 차트와 러닝 목록 */
+/** 한 달 분량 페이지: 월 달력 + 세션 목록 */
 @Composable
 private fun MonthPage(
     ym: YearMonth,
@@ -354,37 +358,234 @@ private fun MonthPage(
     aiResults: Map<String, AiResult>,
     aiLoading: List<String>,
     onAiEval: (RunSession) -> Unit,
+    onDeleteRun:  ((RunSession) -> Unit)? = null,
+    crossSessions: List<ActivitySession> = emptyList(),
+    onEditRun:    ((RunSession) -> Unit)? = null,
+    onShowRoute:  ((RunSession) -> Unit)? = null,
 ) {
     val monthRuns = remember(allRuns, ym) { allRuns.filter { YearMonth.from(it.date) == ym } }
-    val groups = remember(monthRuns) { groupWeeks(monthRuns) }
+    var selDay by remember(ym) { mutableStateOf<LocalDate?>(null) }
+
+    // 선택된 날짜 or 이달 전체
+    val shownRuns = remember(monthRuns, selDay) {
+        if (selDay != null) monthRuns.filter { it.date == selDay }
+        else monthRuns.sortedByDescending { it.date }
+    }
 
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (monthRuns.isEmpty()) {
+        // ── 월 요약 한 줄 ──
+        if (monthRuns.isNotEmpty()) {
+            item(key = "summary") { MonthSummary(ym, monthRuns) }
+        }
+
+        // ── 월 달력 ──
+        item(key = "calendar") {
+            MonthCalendar(
+                ym         = ym,
+                runs       = monthRuns,
+                selectedDay = selDay,
+                crossSessions = crossSessions.filter {
+                    it.date.year == ym.year && it.date.monthValue == ym.monthValue
+                },
+                onDayTap   = { tapped -> selDay = if (selDay == tapped) null else tapped },
+            )
+        }
+
+        // ── 세션 목록 헤더 ──
+        item(key = "list-header") {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (selDay != null) {
+                    Text(
+                        "${selDay!!.monthValue}/${selDay!!.dayOfMonth}(${korDow(selDay!!.dayOfWeek)}) 세션",
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Color.White,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "전체 보기",
+                        fontSize = 11.sp, color = RunColors.Lime,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { selDay = null }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                } else {
+                    Text(
+                        if (monthRuns.isEmpty()) "" else "전체 ${monthRuns.size}회",
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = RunColors.TextDim,
+                    )
+                }
+            }
+        }
+
+        // ── 세션 없을 때 ──
+        if (shownRuns.isEmpty()) {
             item {
                 GlassCard(Modifier.fillMaxWidth()) {
                     Text(
-                        if (allRuns.isEmpty()) "아직 불러온 기록이 없어요. 홈에서 연결해주세요." else "이 달에는 러닝 기록이 없어요.",
+                        if (allRuns.isEmpty()) "아직 불러온 기록이 없어요. 홈에서 연결해주세요."
+                        else if (selDay != null) "이 날은 러닝 기록이 없어요."
+                        else "이 달에는 러닝 기록이 없어요.",
                         color = RunColors.TextDim, fontSize = 12.sp,
                     )
                 }
             }
-        } else {
-            item(key = "summary") { MonthSummary(ym, monthRuns) }
-            groups.forEach { g ->
-                item(key = "w-${g.idx}") { WeekHeader(g) }
-                item(key = "c-${g.idx}") { GlassCard(Modifier.fillMaxWidth()) { WeekComboChart(g) } }
-                items(g.runs.sortedByDescending { it.start }, key = { it.start.toEpochMilli() }) { run ->
-                    val key = run.start.toEpochMilli().toString()
-                    RunRow(run, aiResults[key], key in aiLoading) { onAiEval(run) }
-                }
-            }
+        }
+
+        // ── 세션 목록 ──
+        items(shownRuns, key = { it.start.toEpochMilli() }) { run ->
+            val key = run.start.toEpochMilli().toString()
+            RunRow(run, aiResults[key], key in aiLoading,
+                onAi = { onAiEval(run) },
+                onDelete = onDeleteRun, onEdit = onEditRun, onShowRoute = onShowRoute)
         }
     }
 }
 
+/** 월 달력 — 날짜 칸에 거리 바 + 페이스 색상 점, 탭으로 날짜 선택 */
+@Composable
+private fun MonthCalendar(
+    ym: YearMonth,
+    runs: List<RunSession>,
+    selectedDay: LocalDate?,
+    onDayTap: (LocalDate) -> Unit,
+    crossSessions: List<ActivitySession> = emptyList(),
+) {
+    val runMap   = remember(runs) { runs.groupBy { it.date } }
+    val crossMap = remember(crossSessions) { crossSessions.groupBy { it.date } }
+    val maxKm = remember(runs) { runs.maxOfOrNull { it.distanceKm }?.coerceAtLeast(1.0) ?: 1.0 }
+    val firstDay = ym.atDay(1)
+    // 월요일 시작 — 1일이 무슨 요일인지
+    val startOffset = (firstDay.dayOfWeek.value - 1)  // Mon=0 … Sun=6
+    val daysInMonth = ym.lengthOfMonth()
+
+    GlassCard(Modifier.fillMaxWidth()) {
+        // 요일 헤더
+        Row(Modifier.fillMaxWidth()) {
+            listOf("월","화","수","목","금","토","일").forEach { d ->
+                Text(
+                    d, fontSize = 10.sp, color = RunColors.TextDim,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.weight(1f).padding(bottom = 4.dp),
+                )
+            }
+        }
+        // 날짜 그리드
+        val totalCells = startOffset + daysInMonth
+        val rows = (totalCells + 6) / 7
+        for (row in 0 until rows) {
+            Row(Modifier.fillMaxWidth()) {
+                for (col in 0 until 7) {
+                    val idx = row * 7 + col
+                    val dayNum = idx - startOffset + 1
+                    if (dayNum < 1 || dayNum > daysInMonth) {
+                        Box(Modifier.weight(1f).height(44.dp))
+                    } else {
+                        val date = ym.atDay(dayNum)
+                        val dayRuns = runMap[date]
+                        val isSelected = date == selectedDay
+                        val isToday = date == java.time.LocalDate.now()
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                                .padding(2.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(
+                                    when {
+                                        isSelected -> RunColors.Violet.copy(alpha = 0.5f)
+                                        isToday -> Color.White.copy(alpha = 0.08f)
+                                        else -> Color.Transparent
+                                    }
+                                )
+                                .then(
+                                    if (dayRuns != null)
+                                        Modifier.clickable { onDayTap(date) }
+                                    else Modifier
+                                ),
+                        ) {
+                            Column(
+                                Modifier.fillMaxSize().padding(top = 3.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text(
+                                    "$dayNum",
+                                    fontSize = 10.sp,
+                                    color = when {
+                                        isSelected -> Color.White
+                                        dayRuns != null -> Color.White
+                                        else -> RunColors.TextDim.copy(alpha = 0.5f)
+                                    },
+                                    fontWeight = if (dayRuns != null) FontWeight.Bold else FontWeight.Normal,
+                                )
+                                if (dayRuns != null) {
+                                    Spacer(Modifier.height(2.dp))
+                                    // 거리 바 — km 구간 페이스 흐름 그라데이션
+                                    val km = dayRuns.sumOf { it.distanceKm }
+                                    val frac = (km / maxKm).toFloat().coerceIn(0f, 1f)
+                                    // 모든 세션의 splits를 순서대로 합쳐서 색상 목록 생성
+                                    val splitColors = dayRuns
+                                        .sortedBy { it.start }
+                                        .flatMap { r ->
+                                            r.splits.map { paceColor(it.toDouble()) }
+                                        }
+                                    // splits 없으면 평균 페이스 단색
+                                    val barBrush = when {
+                                        splitColors.size >= 2 ->
+                                            Brush.horizontalGradient(splitColors)
+                                        splitColors.size == 1 ->
+                                            Brush.horizontalGradient(listOf(splitColors[0], splitColors[0]))
+                                        else -> {
+                                            val c = paceColor(dayRuns.first().paceSecPerKm)
+                                            Brush.horizontalGradient(listOf(c, c))
+                                        }
+                                    }
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth(0.8f)
+                                            .height(4.dp)
+                                            .clip(RoundedCornerShape(2.dp))
+                                            .background(Color.White.copy(alpha = 0.12f))
+                                    ) {
+                                        Box(
+                                            Modifier
+                                                .fillMaxWidth(frac)
+                                                .fillMaxHeight()
+                                                .background(barBrush)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 범례
+        Spacer(Modifier.height(6.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("느림", fontSize = 9.sp, color = RunColors.TextDim)
+            Spacer(Modifier.width(4.dp))
+            listOf(480, 420, 360, 300, 240).forEach { pace ->
+                Box(
+                    Modifier.size(8.dp).clip(RoundedCornerShape(2.dp))
+                        .background(paceColor(pace.toDouble()))
+                )
+                Spacer(Modifier.width(2.dp))
+            }
+            Text("빠름", fontSize = 9.sp, color = RunColors.TextDim)
+        }
+    }
+}
 /** 가장 오래된 기록의 달부터 이번 달까지 (기록이 없는 달도 포함해서 연속으로) */
 private fun monthsToShow(runs: List<RunSession>, today: LocalDate): List<YearMonth> {
     val last = YearMonth.from(today)
@@ -408,8 +609,13 @@ fun RecordsScreen(
     aiResults: Map<String, AiResult>,
     aiLoading: List<String>,
     onAiEval: (RunSession) -> Unit,
+    onDeleteRun:  ((RunSession) -> Unit)? = null,
+    onEditRun:    ((RunSession) -> Unit)? = null,
+    onShowRoute:  ((RunSession) -> Unit)? = null,
 ) {
+    val ctx = LocalContext.current
     val months = remember(runs, today) { monthsToShow(runs, today) }
+    val crossSessions = remember { CrossTrainingStore.load(ctx) }
     val pagerState = rememberPagerState(initialPage = (months.size - 1).coerceAtLeast(0)) { months.size }
     val scope = rememberCoroutineScope()
 
@@ -450,7 +656,17 @@ fun RecordsScreen(
             state = pagerState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
         ) { page ->
-            MonthPage(months[page], runs, aiResults, aiLoading, onAiEval)
+            MonthPage(
+                ym            = months[page],
+                allRuns       = runs,
+                aiResults     = aiResults,
+                aiLoading     = aiLoading,
+                onAiEval      = onAiEval,
+                onDeleteRun   = onDeleteRun,
+                onEditRun     = onEditRun,
+                onShowRoute   = onShowRoute,
+                crossSessions = crossSessions,
+            )
         }
     }
 }

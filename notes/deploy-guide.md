@@ -44,7 +44,7 @@
 5. Android Studio → Build → **Generate Signed App Bundle / APK** → Android App Bundle(.aab) 선택 → release.
 6. 릴리스 빌드를 폰에 설치해서 확인하세요 (R8 난독화가 삼성 SDK를 깨뜨리는 경우가 있어요). 문제가 생기면 `isMinifyEnabled = false`로 먼저 확인하세요.
 
-> 자세한 순서, 키 만드는 방법, 요청서 초안은 `삼성-파트너등록-준비.md`, 패키지명 변경은 `패키지명변경.md`를 보세요.
+> 자세한 순서, 키 만드는 방법, 요청서 초안은 `samsung-partner-prep.md`, 패키지명 변경은 `package-rename.md`를 보세요.
 
 ## 3. 삼성 파트너 등록 요청
 

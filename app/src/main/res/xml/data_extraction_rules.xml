@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12+(API 31+) 데이터 추출 규칙
+    cloud: Google 계정 백업 (재설치 복원)
+    device: 로컬 기기 이전 (기기 교체 복원)
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="runlog.xml" />
+        <include domain="file" path="runs_cache.json" />
+        <include domain="file" path="health_cache.json" />
+        <include domain="file" path="body_cache.json" />
+        <include domain="file" path="imported_runs.json" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="sharedpref" path="runlog.xml" />
+        <include domain="file" path="runs_cache.json" />
+        <include domain="file" path="health_cache.json" />
+        <include domain="file" path="body_cache.json" />
+        <include domain="file" path="imported_runs.json" />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12+(API 31+) 자동 백업 규칙
+    - SharedPreferences "runlog": 훈련 계획, AI 평가, 프로필, 설정 전체 백업
+    - filesDir 내 JSON 파일: 러닝 기록 캐시, 신체 정보 캐시, 가져온 기록 백업
+    - runs_cache.json 은 삼성 헬스에서 재동기화 가능하므로 제외 가능하지만
+      AI 평가 결과는 runs_cache 안에 없으므로 PlanStore(SharedPrefs)가 핵심
+-->
+<full-backup-content>
+    <!-- SharedPreferences 전체 백업 (훈련 계획, AI 평가, 프로필, 설정) -->
+    <include domain="sharedpref" path="runlog.xml" />
+    <!-- filesDir JSON 캐시 백업 -->
+    <include domain="file" path="runs_cache.json" />
+    <include domain="file" path="health_cache.json" />
+    <include domain="file" path="body_cache.json" />
+    <include domain="file" path="imported_runs.json" />
+</full-backup-content>

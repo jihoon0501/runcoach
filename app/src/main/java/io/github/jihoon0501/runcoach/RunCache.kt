@@ -18,15 +18,16 @@ import java.time.ZoneId
  * - 동기화는 '마지막 동기화 3일 전'부터 지금까지만 다시 읽어서 합친다 (늦게 올라온 기록, 수정된 기록 반영).
  * - 처음 한 번만 전체 기간(Config.LOAD_DAYS)을 읽는다. 읽는 기간을 늘리면 늘어난 앞쪽 기간만 추가로 읽는다.
  */
-class RunStore(context: Context, private val repo: SamsungRepo) {
+class RunStore(context: Context, private val repo: RunSource) {
 
     companion object {
         /** 기록 분석 방식을 바꾸면 이 숫자를 올려서, 저장된 기록을 한 번 새로 계산하게 한다 */
-        const val CACHE_VERSION = 5
+        const val CACHE_VERSION = 6
         private const val OVERLAP_DAYS = 3L
     }
 
     private val file = File(context.applicationContext.filesDir, "runs_cache.json")
+    private val imported = ImportedStore(context.applicationContext)   // 파일(FIT/GPX/TCX)에서 가져온 기록
 
     /** 마지막으로 동기화에 성공한 시각 (ms), 없으면 0 */
     var lastSyncMs: Long = 0L
@@ -50,7 +51,11 @@ class RunStore(context: Context, private val repo: SamsungRepo) {
     }
 
     /** 저장된 기록 (없으면 빈 목록). 앱을 열자마자 화면에 보여주는 용도 */
-    suspend fun loadCached(): List<RunSession> = withContext(Dispatchers.IO) { readCache()?.runs ?: emptyList() }
+    suspend fun loadCached(): List<RunSession> = withContext(Dispatchers.IO) {
+        val c = readCache()
+        walks = imported.mergeWalks(c?.walks ?: emptyList())
+        imported.mergeRuns(c?.runs ?: emptyList())
+    }
 
     /** 저장된 기록을 지운다 ('전체 다시 불러오기'용) */
     fun clear() {
@@ -64,18 +69,19 @@ class RunStore(context: Context, private val repo: SamsungRepo) {
      * 저장된 기록이 없을 때만 전체 기간을 읽고, 그때는 최근 → 과거 순으로 읽은 만큼 [onPartial]로 알려준다.
      */
     suspend fun sync(onPartial: (List<RunSession>) -> Unit = {}): List<RunSession> {
+        return try {
         val now = Instant.now()
         val desiredStart = now.minus(Duration.ofDays(Config.LOAD_DAYS))
         val cache = withContext(Dispatchers.IO) { readCache() }
 
         if (cache == null) {
             val (allRuns, allWalks) = repo.fetchAll(desiredStart, now) { r, w ->
-                walks = w
-                onPartial(r)
+                walks = imported.mergeWalks(w)
+                onPartial(imported.mergeRuns(r))
             }
-            walks = allWalks
+            walks = imported.mergeWalks(allWalks)
             withContext(Dispatchers.IO) { writeCache(allRuns, allWalks, desiredStart.toEpochMilli(), now.toEpochMilli()) }
-            return allRuns
+            return imported.mergeRuns(allRuns)
         }
 
         val mergedRuns = LinkedHashMap<Long, RunSession>()
@@ -101,9 +107,12 @@ class RunStore(context: Context, private val repo: SamsungRepo) {
 
         val runList = mergedRuns.values.sortedBy { it.start }
         val walkList = mergedWalks.values.sortedBy { it.start }
-        walks = walkList
+        walks = imported.mergeWalks(walkList)
         withContext(Dispatchers.IO) { writeCache(runList, walkList, coveredFrom, now.toEpochMilli()) }
-        return runList
+            imported.mergeRuns(runList)
+        } catch (e: Throwable) {
+            throw e
+        }
     }
 
     // ───────────── 파일 읽기/쓰기 ─────────────
@@ -132,9 +141,40 @@ class RunStore(context: Context, private val repo: SamsungRepo) {
                 walks = walkList
                 Cache(runs, walkList, o.getLong("coveredFrom"), synced)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             null
         }
+    }
+
+    /**
+     * 특정 세션을 캐시에서 삭제한다.
+     * 삼성 헬스 / Health Connect 원본은 건드리지 않음 — 앱 내 표시에서만 제거.
+     */
+    /**
+     * 특정 세션을 캐시에서 삭제한다.
+     * 삼성 헬스 / Health Connect 원본은 그대로 — 앱 캐시 파일만 수정.
+     * 다음 sync()에서 원본이 복원될 수 있으므로 "숨기기" 성격임을 UI에 안내한다.
+     */
+    suspend fun deleteRun(startMs: Long): List<RunSession> = withContext(Dispatchers.IO) {
+        val c = readCache() ?: return@withContext loadCached()
+        val updated = c.runs.filter { it.start.toEpochMilli() != startMs }
+        writeCache(updated, c.walks, c.coveredFromMs, c.syncedUntilMs)
+        imported.mergeRuns(updated)   // imported 기록과 합쳐서 반환
+    }
+
+    /**
+     * 특정 세션의 거리·시간·메모를 수정한다.
+     * 삼성 헬스 원본은 그대로 — 앱 캐시 파일만 덮어씀.
+     */
+    suspend fun editRun(startMs: Long, newDistKm: Double, newDurSec: Long, newTitle: String?): List<RunSession> = withContext(Dispatchers.IO) {
+        val c = readCache() ?: return@withContext loadCached()
+        val updated = c.runs.map { r ->
+            if (r.start.toEpochMilli() == startMs)
+                r.copy(distanceKm = newDistKm, durationSec = newDurSec, title = newTitle)
+            else r
+        }
+        writeCache(updated, c.walks, c.coveredFromMs, c.syncedUntilMs)
+        imported.mergeRuns(updated)
     }
 
     private fun writeCache(runs: List<RunSession>, walkList: List<WalkSession>, coveredFromMs: Long, syncedUntilMs: Long) {
@@ -186,6 +226,22 @@ class RunStore(context: Context, private val repo: SamsungRepo) {
         put("mainKm", r.mainKm)
         put("mainSec", r.mainSec)
         put("vo2Max", r.vo2Max?.toDouble() ?: JSONObject.NULL)
+        // GPS 경로 직렬화 (있을 때만)
+        if (r.route.isNotEmpty()) {
+            put("route", JSONArray().also { ra ->
+                r.route.forEach { p ->
+                    ra.put(JSONObject().apply {
+                        put("lat", p.lat); put("lng", p.lng)
+                        put("alt", p.altitudeM)
+                        put("acc", p.accuracyM.toDouble())
+                        put("ts", p.timestampMs)
+                        p.hr?.let { put("hr", it) }
+                        p.cadence?.let { put("cad", it) }
+                        p.speedMps?.let { put("spd", it) }
+                    })
+                }
+            })
+        }
         put("segments", JSONArray().also { a ->
             r.segments.forEach { g ->
                 a.put(JSONObject().apply {
@@ -204,6 +260,23 @@ class RunStore(context: Context, private val repo: SamsungRepo) {
     private fun runFromJson(o: JSONObject): RunSession {
         val sp = o.getJSONArray("splits")
         val sg = o.getJSONArray("segments")
+        val route = o.optJSONArray("route")?.let { ra ->
+            (0 until ra.length()).mapNotNull { i ->
+                val p = ra.optJSONObject(i) ?: return@mapNotNull null
+                runCatching {
+                    RoutePoint(
+                        lat         = p.getDouble("lat"),
+                        lng         = p.getDouble("lng"),
+                        altitudeM   = p.optDouble("alt", 0.0),
+                        accuracyM   = p.optDouble("acc", 0.0).toFloat(),
+                        timestampMs = p.optLong("ts", 0L),
+                        hr          = if (p.has("hr")) p.getInt("hr") else null,
+                        cadence     = if (p.has("cad")) p.getInt("cad") else null,
+                        speedMps    = if (p.has("spd")) p.optDouble("spd") else null,
+                    )
+                }.getOrNull()
+            }
+        } ?: emptyList()
         return RunSession(
             start = Instant.ofEpochMilli(o.getLong("start")),
             durationSec = o.getLong("durationSec"),
@@ -230,6 +303,7 @@ class RunStore(context: Context, private val repo: SamsungRepo) {
                     cadence = g.intOrNull("cadence"),
                 )
             },
+            route = route,
         )
     }
 }

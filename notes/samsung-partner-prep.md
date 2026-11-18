@@ -11,7 +11,7 @@
 
 SHA-256은 **스토어에서 실제로 배포되는 앱의 서명 키** 기준이라서, 패키지명과 서명 방식을 먼저 정해야 해요.
 
-1. **패키지명 확정: `io.github.jihoon0501.runcoach`** (바꾸려면 `rename_package.py` 또는 Android Studio Refactor, 자세한 건 `패키지명변경.md`)
+1. **패키지명 확정: `io.github.jihoon0501.runcoach`** (바꾸려면 `rename_package.py` 또는 Android Studio Refactor, 자세한 건 `package-rename.md`)
 2. **업로드 키(키스토어) 만들기** → 아래 2번
 3. **Google Play Console**에서 개발자 계정을 만들고, 확정한 패키지명으로 앱 만들기 → 서명된 AAB를 **내부 테스트**에 올리기
 4. Play Console → 출시 → 설정 → **앱 무결성** → '앱 서명 키 인증서'의 **SHA-256** 복사

@@ -1,9 +1,16 @@
 package io.github.jihoon0501.runcoach
 
+import androidx.health.connect.client.records.WeightRecord
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.PermissionController
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import android.Manifest
 import android.app.TimePickerDialog
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
+import androidx.activity.result.contract.ActivityResultContracts.CreateDocument
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -283,6 +290,207 @@ fun CalendarCard(onShare: () -> Unit) {
 }
 
 /** 설정: 내 정보 요약 + 수정, 그리고 이 폰에 저장된 내 데이터 모두 지우기 */
+/** 신체 탭의 설정 카드: 체중계·인바디 앱이 삼성 헬스/Health Connect에 넣은 키·체중·체성분을 가져오고, 내 정보에 반영한다 */
+@Composable
+fun BodyInfoCard(onProfileSaved: () -> Unit, onDataChanged: () -> Unit = {}) {
+    val context = LocalContext.current
+    val prefs = remember { Prefs(context) }
+    val useHc = remember { prefs.dataSource == DataSourceKind.HEALTH_CONNECT }
+    val store = remember { BodyStore(context.applicationContext, prefs.dataSource) }
+    val scope = rememberCoroutineScope()
+    var list by remember { mutableStateOf(store.load()) }
+    var msg by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var auto by remember { mutableStateOf(prefs.bodyAutoApply) }
+    var inAi by remember { mutableStateOf(prefs.bodyInAi) }
+
+    fun refresh(full: Boolean = false) {
+        scope.launch {
+            busy = true
+            msg = try {
+                list = store.refresh(full)
+                onDataChanged()
+                BodyStore.updateAiContext(prefs, list)
+                if (BodyStore.applyToProfile(prefs, list)) onProfileSaved()
+                if (list.isEmpty()) "읽을 신체 기록이 없어요. 체중계·인바디 앱이 삼성 헬스(또는 Health Connect)로 보내도록 설정했는지 확인해 주세요."
+                else "가져왔어요 ✅"
+            } catch (e: Throwable) {
+                "읽지 못했어요: ${e::class.java.simpleName}"
+            }
+            busy = false
+        }
+    }
+
+    val hcLauncher = rememberLauncherForActivityResult(PermissionController.createRequestPermissionResultContract()) { granted ->
+        if (granted.contains(HealthPermission.getReadPermission(WeightRecord::class))) refresh() else msg = "허용하지 않았어요"
+    }
+    val onFetch: () -> Unit = {
+        if (useHc) {
+            if (HealthConnectRepo.isAvailable(context)) hcLauncher.launch(HealthConnectRepo.BODY_PERMISSIONS)
+            else msg = "Health Connect를 설치하거나 업데이트해 주세요"
+        } else {
+            scope.launch {
+                try {
+                    if (store.hasPermission() || store.request(context as android.app.Activity)) refresh() else msg = "허용하지 않았어요"
+                } catch (e: Throwable) {
+                    msg = "연결하지 못했어요: ${e::class.java.simpleName}"
+                }
+            }
+        }
+    }
+
+    GlassCard(Modifier.fillMaxWidth()) {
+        SectionTitle("신체·체성분 (선택)")
+        Spacer(Modifier.height(4.dp))
+        val latest = BodyStore.latest(list)
+        if (latest == null) {
+            Text(
+                "체중계·인바디 앱이 삼성 헬스(또는 Health Connect)에 넣은 키·체중·체지방을 읽어요. 읽기만 하고, 이 폰 안에서만 써요. " +
+                    "가져오면 체중 변화 이력을 최대 5년치 이 폰에 쌓고, 내 정보의 키·체중도 새 측정값으로 자동 갱신해요. 혈압 같은 의료성 정보는 읽지 않아요.",
+                color = RunColors.TextDim, fontSize = 11.sp, lineHeight = 16.sp,
+            )
+        } else {
+            Text(
+                listOfNotNull(
+                    latest.weightKg?.let { "체중 %.1fkg".format(it) },
+                    latest.heightCm?.let { "키 %.0fcm".format(it) },
+                    latest.bmi?.let { "BMI %.1f".format(it) },
+                    latest.bodyFatPct?.let { "체지방 %.1f%%".format(it) },
+                    latest.skeletalMuscleKg?.let { "골격근 %.1fkg".format(it) },
+                ).joinToString(" · "),
+                color = Color.White, fontSize = 12.sp,
+            )
+            Text("측정일 ${latest.date}", color = RunColors.TextDim, fontSize = 10.sp)
+            BodyStore.weightChange(list)?.let { (diff, days) ->
+                Text(
+                    "${days}일간 체중 변화 ${if (diff >= 0) "+" else ""}%.1fkg".format(diff),
+                    color = RunColors.TextDim, fontSize = 10.sp,
+                )
+            }
+            val p = prefs.loadProfile()
+            val w = latest.weightKg?.let { Math.round(it) }
+            val h = latest.heightCm?.let { Math.round(it) }
+            val differs = (w != null && w != p.weightKg) || (h != null && h != p.heightCm)
+            if (differs && !auto) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "내 정보: 체중 ${p.weightKg}kg · 키 ${p.heightCm}cm — 최근 기록과 달라요. 반영하면 소모 열량 추정 등에 새 값을 써요.",
+                    color = RunColors.TextDim, fontSize = 10.sp, lineHeight = 15.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = {
+                        val np = p.copy(weightKg = w ?: p.weightKg, heightCm = h ?: p.heightCm)
+                        prefs.saveProfile(np)
+                        UserProfile.data = np
+                        onProfileSaved()
+                    },
+                    modifier = Modifier.height(32.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                ) { Text("내 정보에 반영", color = RunColors.Lime, fontSize = 12.sp) }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "새 측정값을 내 정보(키·체중)에 자동 반영",
+                color = Color.White, fontSize = 11.sp, modifier = Modifier.weight(1f),
+            )
+            Switch(checked = auto, onCheckedChange = { auto = it; prefs.bodyAutoApply = it })
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "AI 평가에 체중 변화량 포함 (선택)",
+                color = Color.White, fontSize = 11.sp, modifier = Modifier.weight(1f),
+            )
+            Switch(checked = inAi, onCheckedChange = {
+                inAi = it
+                prefs.bodyInAi = it
+                BodyStore.updateAiContext(prefs, list)
+            })
+        }
+        Text(
+            "켜면 AI 평가를 요청할 때 '최근 8주 체중 변화 -2.1kg' 같은 변화량만 함께 보내요. 체지방·BMI와 체중의 절대값은 따로 보내지 않아요 " +
+                "(키·체중은 기본 정보로 이미 전송돼요). Anthropic API 키를 입력한 경우에만 쓰여요.",
+            color = RunColors.TextDim, fontSize = 10.sp, lineHeight = 15.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onFetch,
+                enabled = !busy,
+                colors = ButtonDefaults.buttonColors(containerColor = RunColors.Lime, contentColor = RunColors.Bg),
+                modifier = Modifier.height(36.dp),
+            ) { Text(if (busy) "읽는 중..." else if (list.isEmpty()) "신체 정보 가져오기" else "다시 가져오기", fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+            if (list.isNotEmpty() && !useHc) {
+                OutlinedButton(
+                    onClick = { refresh(full = true) },
+                    enabled = !busy,
+                    modifier = Modifier.height(36.dp),
+                ) { Text("이력 전체 다시 읽기", color = RunColors.Lime, fontSize = 12.sp) }
+            }
+        }
+        if (msg.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(msg, color = Color.White, fontSize = 11.sp)
+        }
+    }
+}
+
+/** 설정 탭: 기록을 가져오는 곳(삼성 헬스 / Health Connect)을 바꾼다 */
+@Composable
+fun DataSourceCard() {
+    val context = LocalContext.current
+    val prefs = remember { Prefs(context) }
+    val current = prefs.dataSource
+    var pending by remember { mutableStateOf<String?>(null) }
+    val names = linkedMapOf(
+        DataSourceKind.SAMSUNG to "삼성 헬스",
+        DataSourceKind.HEALTH_CONNECT to "Health Connect (가민 등)",
+    )
+    GlassCard(Modifier.fillMaxWidth()) {
+        SectionTitle("데이터 소스")
+        Spacer(Modifier.height(4.dp))
+        Text("지금: ${names[current] ?: current}", color = Color.White, fontSize = 12.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "가민 워치를 쓰면 가민 커넥트 앱에서 Health Connect 연동을 켜고, 여기서 Health Connect를 고르세요. " +
+                "소스를 바꾸면 이 앱에 저장된 기록 사본을 지우고 다시 읽어 와요. 삼성 헬스와 Health Connect의 원본은 그대로예요.",
+            color = RunColors.TextDim, fontSize = 10.sp, lineHeight = 15.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            names.forEach { (key, label) ->
+                if (key != current) {
+                    OutlinedButton(
+                        onClick = { pending = key },
+                        modifier = Modifier.height(34.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                    ) { Text("$label 로 바꾸기", color = RunColors.Lime, fontSize = 12.sp) }
+                }
+            }
+        }
+    }
+    pending?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            title = { Text("데이터 소스를 바꿀까요?") },
+            text = { Text("저장된 기록 사본을 지우고 ${names[target]}에서 다시 읽어 와요. 처음에는 시간이 조금 걸릴 수 있어요.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    prefs.dataSource = target
+                    java.io.File(context.filesDir, "runs_cache.json").delete()
+                    java.io.File(context.filesDir, "health_cache.json").delete()
+                    pending = null
+                    (context as? android.app.Activity)?.recreate()
+                }) { Text("바꾸기") }
+            },
+            dismissButton = { TextButton(onClick = { pending = null }) { Text("취소") } },
+        )
+    }
+}
+
 @Composable
 fun ProfileCard(onSaved: () -> Unit) {
     val context = LocalContext.current
@@ -375,7 +583,7 @@ fun ProfileCard(onSaved: () -> Unit) {
                         UserProfile.data = np
                         version++
                         showEdit = false
-                        Toast.makeText(context, "저장했어요. '새 계획'을 누르면 계획에도 반영돼요", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "저장했어요. 계획에 바로 반영했어요 (기록이 없으면 '새 계획'을 눌러주세요)", Toast.LENGTH_LONG).show()
                         onSaved()
                     }
                 }) { Text("저장", color = RunColors.Lime) }
@@ -393,7 +601,7 @@ fun ProfileCard(onSaved: () -> Unit) {
             title = { Text("내 데이터를 모두 지울까요?", fontSize = 17.sp) },
             text = {
                 Text(
-                    "이 폰에 저장된 내 정보, 훈련 계획, 러닝 기록 저장본, 건강 요약, AI 평가, API 키, 캘린더 연결 정보가 모두 삭제돼요. " +
+                    "이 폰에 저장된 내 정보, 훈련 계획, 러닝 기록 저장본, 파일에서 가져온 기록, 건강 요약, 체중·체성분 이력, AI 평가, API 키, 캘린더 연결 정보가 모두 삭제돼요. " +
                         "삼성 헬스와 구글 캘린더에 있는 원본 데이터는 그대로예요. 삭제하면 앱이 처음 상태로 돌아가요.",
                     fontSize = 12.sp,
                 )
@@ -403,7 +611,7 @@ fun ProfileCard(onSaved: () -> Unit) {
                     prefs.reminderOn = false
                     Reminder.schedule(context)      // 예약된 알림을 먼저 취소
                     prefs.clearAll()
-                    listOf("runs_cache.json", "health_cache.json").forEach { java.io.File(context.filesDir, it).delete() }
+                    listOf("runs_cache.json", "health_cache.json", "body_cache.json", "imported_runs.json").forEach { java.io.File(context.filesDir, it).delete() }
                     UserProfile.data = ProfileData()
                     showClear = false
                     Toast.makeText(context, "삭제했어요. 앱을 다시 열어 주세요", Toast.LENGTH_LONG).show()
@@ -476,6 +684,147 @@ fun AboutCard() {
                     )
                 },
             )
+        }
+    }
+}
+
+// ─── 직접 백업 / 복원 카드 ────────────────────────────────────────────────────
+@Composable
+fun BackupRestoreCard() {
+    val context = LocalContext.current
+    val prefs   = remember { Prefs(context) }
+    val scope   = rememberCoroutineScope()
+    var status  by remember { mutableStateOf("") }
+
+    // JSON 직렬화 — SharedPreferences + filesDir JSON 모두 하나의 파일로
+    fun buildBackupJson(): String {
+        val sp = context.getSharedPreferences("runlog", android.content.Context.MODE_PRIVATE)
+        val root = org.json.JSONObject()
+        root.put("version", 1)
+        root.put("exportedAt", java.time.Instant.now().toString())
+        // SharedPreferences 전체
+        val spObj = org.json.JSONObject()
+        for ((k, v) in sp.all) {
+            when (v) {
+                is String  -> spObj.put(k, v)
+                is Boolean -> spObj.put(k, v)
+                is Int     -> spObj.put(k, v)
+                is Long    -> spObj.put(k, v)
+                is Float   -> spObj.put(k, v)
+                else       -> {}
+            }
+        }
+        root.put("prefs", spObj)
+        // filesDir JSON 파일들
+        val files = org.json.JSONObject()
+        listOf("runs_cache.json","health_cache.json","body_cache.json","imported_runs.json").forEach { name ->
+            val f = java.io.File(context.filesDir, name)
+            if (f.exists()) files.put(name, f.readText())
+        }
+        root.put("files", files)
+        return root.toString(2)
+    }
+
+    fun restoreFromJson(json: String) {
+        try {
+            val root = org.json.JSONObject(json)
+            val sp   = context.getSharedPreferences("runlog", android.content.Context.MODE_PRIVATE)
+            val edit = sp.edit()
+            val spObj = root.optJSONObject("prefs")
+            if (spObj != null) {
+                // Long 키 목록 — JSON은 Long도 Int로 파싱하므로 명시적으로 putLong
+                val longKeys = setOf("cal_id")
+                for (k in spObj.keys()) {
+                    when {
+                        k in longKeys -> edit.putLong(k, (spObj.get(k) as Number).toLong())
+                        else -> when (val v = spObj.get(k)) {
+                            is String  -> edit.putString(k, v)
+                            is Boolean -> edit.putBoolean(k, v)
+                            is Int     -> edit.putInt(k, v)
+                            is Long    -> edit.putLong(k, v)
+                            is Double  -> edit.putFloat(k, v.toFloat())
+                            else       -> {}
+                        }
+                    }
+                }
+                edit.apply()
+            }
+            val files = root.optJSONObject("files")
+            if (files != null) {
+                for (name in files.keys()) {
+                    java.io.File(context.filesDir, name).writeText(files.getString(name))
+                }
+            }
+            status = "✅ 복원 완료! 앱을 재시작해 주세요."
+        } catch (e: Exception) {
+            status = "❌ 복원 실패: ${e.message}"
+        }
+    }
+
+    // 파일 저장 launcher
+    val saveLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                out.write(buildBackupJson().toByteArray(Charsets.UTF_8))
+            }
+            status = "✅ 백업 완료!"
+        } catch (e: Exception) {
+            status = "❌ 백업 실패: ${e.message}"
+        }
+    }
+
+    // 파일 열기 launcher
+    val openLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        try {
+            val json = context.contentResolver.openInputStream(uri)
+                ?.bufferedReader()?.readText() ?: return@rememberLauncherForActivityResult
+            restoreFromJson(json)
+        } catch (e: Exception) {
+            status = "❌ 파일 열기 실패: ${e.message}"
+        }
+    }
+
+    GlassCard(Modifier.fillMaxWidth()) {
+        SectionTitle("직접 백업 / 복원")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "훈련 계획, AI 평가, 프로필, 기록 캐시를 JSON 파일로 저장해요. 재설치 전에 내보내고, 설치 후 가져오면 돼요.",
+            color = RunColors.TextDim, fontSize = 11.sp, lineHeight = 16.sp,
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 내보내기
+            Button(
+                onClick = {
+                    val date = java.time.LocalDate.now().toString()
+                    saveLauncher.launch("runcoach_backup_$date.json")
+                },
+                modifier = Modifier.weight(1f).height(40.dp),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = RunColors.Violet,
+                ),
+            ) {
+                Text("⬆ 내보내기", fontSize = 12.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            }
+            // 가져오기
+            OutlinedButton(
+                onClick = { openLauncher.launch(arrayOf("application/json", "*/*")) },
+                modifier = Modifier.weight(1f).height(40.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, RunColors.Lime.copy(alpha = 0.6f)),
+            ) {
+                Text("⬇ 가져오기", fontSize = 12.sp, color = RunColors.Lime)
+            }
+        }
+        if (status.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(status, color = if (status.startsWith("✅")) RunColors.Lime else RunColors.Pink,
+                fontSize = 11.sp)
         }
     }
 }

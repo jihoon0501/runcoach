@@ -176,4 +176,24 @@ object CalendarSync {
         prefs.saveCalendarMap(map)
         return CalendarResult(added, updated, removed, replaced, "${cal.name} (${cal.account})")
     }
+
+    /**
+     * 앱이 등록한 캘린더 항목을 모두 삭제하고 저장된 매핑을 지운다.
+     * 공유를 끄거나 처음부터 다시 공유하고 싶을 때 쓴다.
+     * 삭제한 항목 수를 돌려준다.
+     */
+    fun deleteAll(context: Context, prefs: Prefs): Int {
+        if (!hasPermission(context)) return 0
+        val resolver = context.contentResolver
+        val map = prefs.loadCalendarMap()
+        var n = 0
+        map.values.forEach {
+            val rows = resolver.delete(
+                ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, it), null, null
+            )
+            if (rows > 0) n++
+        }
+        prefs.saveCalendarMap(emptyMap())
+        return n
+    }
 }

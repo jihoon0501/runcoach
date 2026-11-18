@@ -1,5 +1,12 @@
 package io.github.jihoon0501.runcoach
 
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DatePicker
+import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.PermissionController
 import android.Manifest
 import android.app.Activity
 import android.os.Build
@@ -93,7 +100,10 @@ internal class ProfileForm(p: ProfileData) {
     var gHour by mutableStateOf(if (p.goalTimeSec >= 3600) (p.goalTimeSec / 3600).toString() else "")
     var gMin by mutableStateOf(if (p.goalTimeSec > 0) ((p.goalTimeSec % 3600) / 60).toString() else "")
     var gSec by mutableStateOf(if (p.goalTimeSec > 0) (p.goalTimeSec % 60).toString() else "")
-    var runDays by mutableStateOf(p.runDays.coerceIn(3, 4))
+    var raceDate by mutableStateOf(p.raceDate)
+    var intensityLevel by mutableStateOf(p.intensityLevel)
+    var seasonAware by mutableStateOf(p.seasonAware)
+    var runDays by mutableStateOf(p.runDays.coerceIn(3, 7))
     var weeklyKm by mutableStateOf(p.weeklyKm.toFloat())
     var jointCare by mutableStateOf(p.jointCare)
 
@@ -106,10 +116,11 @@ internal class ProfileForm(p: ProfileData) {
         val w = weight.toIntOrNull()
         if (h == null || h !in 120..230) return "키를 120~230cm 사이로 입력해 주세요"
         if (w == null || w !in 30..250) return "체중을 30~250kg 사이로 입력해 주세요"
-        if (birthYear.isNotBlank()) {
-            val y = birthYear.toIntOrNull()
-            if (y == null || y !in 1930..(LocalDate.now().year - 10)) return "출생연도를 확인해 주세요 (예: 1990)"
-        }
+        // 출생연도 필수
+        val y = birthYear.toIntOrNull()
+        if (birthYear.isBlank() || y == null || y !in 1930..(LocalDate.now().year - 10))
+            return "출생연도를 입력해 주세요 (예: 1990)"
+        // 최대 심박: 비워 두면 220-나이로 자동 계산, 직접 입력 시 범위 확인
         if (maxHr.isNotBlank()) {
             val m = maxHr.toIntOrNull()
             if (m == null || m !in 120..230) return "최대 심박은 120~230 사이로 입력하거나 비워 두세요"
@@ -139,6 +150,9 @@ internal class ProfileForm(p: ProfileData) {
             maxHr = maxHr.toIntOrNull() ?: 0,
             goalDistanceKm = goalDistanceOf(goalKey),
             goalTimeSec = if (noGoal) 0 else goalTotalSec(),
+            raceDate = if (noGoal) null else raceDate,
+            intensityLevel = intensityLevel,
+            seasonAware = seasonAware,
             runDays = runDays,
             weeklyKm = weeklyKm.roundToInt(),
             jointCare = jointCare,
@@ -173,12 +187,14 @@ private fun NumberField(
     onChange: (String) -> Unit,
     modifier: Modifier = Modifier,
     suffix: String = "",
+    placeholder: String = "",
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = { v -> onChange(v.filter { it.isDigit() }.take(4)) },
         label = { Text(label) },
         suffix = if (suffix.isNotEmpty()) ({ Text(suffix, color = RunColors.TextDim) }) else null,
+        placeholder = if (placeholder.isNotEmpty()) ({ Text(placeholder, color = RunColors.TextDim, fontSize = 14.sp) }) else null,
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = modifier,
@@ -227,10 +243,31 @@ internal fun BodyFields(f: ProfileForm) {
             colors = fieldColors(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            NumberField("출생연도 (선택)", f.birthYear, { f.birthYear = it }, Modifier.weight(1f))
-            NumberField("최대 심박 (선택)", f.maxHr, { f.maxHr = it }, Modifier.weight(1f), suffix = "bpm")
+            NumberField("출생연도 *", f.birthYear, { f.birthYear = it }, Modifier.weight(1f))
+            // 최대 심박 필드: 비워 두면 220-나이로 자동 계산, 직접 입력도 허용
+            val autoHr = f.estimatedMaxHr()
+            NumberField(
+                label = "최대 심박 (선택)",
+                value = f.maxHr,
+                onChange = { f.maxHr = it },
+                modifier = Modifier.weight(1f),
+                suffix = "bpm",
+                placeholder = "$autoHr",
+            )
         }
-        Hint("최대 심박을 모르면 비워 두세요. 출생연도로 추정해요 (현재 추정 ${f.estimatedMaxHr()}bpm). 워치에서 측정한 최대 심박이 있으면 그 값이 더 정확해요.")
+        // 출생연도가 있으면 자동 계산값 실시간 표시
+        val birthYearInt = f.birthYear.toIntOrNull()
+        if (birthYearInt != null && birthYearInt in 1930..(LocalDate.now().year - 10)) {
+            val age = LocalDate.now().year - birthYearInt
+            val autoMax = 220 - age
+            if (f.maxHr.isBlank()) {
+                Hint("나이 ${age}세 기준 권장 최대 심박: ${autoMax}bpm (220 − ${age}). 비워 두면 이 값으로 자동 계산돼요.")
+            } else {
+                Hint("직접 입력한 최대 심박 ${f.maxHr}bpm을 사용해요. 워치에서 측정한 값이면 더 정확해요.")
+            }
+        } else {
+            Hint("출생연도를 입력하면 최대 심박(220 − 나이)이 자동 계산돼요. 워치에서 직접 측정한 값이 있으면 입력하세요.")
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             NumberField("키", f.height, { f.height = it }, Modifier.weight(1f), suffix = "cm")
             NumberField("체중", f.weight, { f.weight = it }, Modifier.weight(1f), suffix = "kg")
@@ -262,29 +299,110 @@ internal fun GoalFields(f: ProfileForm) {
                 NumberField("초", f.gSec, { f.gSec = it }, Modifier.weight(1f))
             }
             Hint("기록을 비워 두면 최근 러닝 기록을 기준으로 목표를 자동으로 잡아요.")
+
+            if (f.goalKey == "하프" || f.goalKey == "풀") {
+                val rd = f.raceDate
+                Label("목표 대회 날짜 (선택)")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    var showPicker by remember { mutableStateOf(false) }
+                    OutlinedButton(
+                        onClick = { showPicker = true },
+                        modifier = Modifier.weight(1f).height(44.dp),
+                    ) {
+                        Text(
+                            if (rd != null) "${rd.year}년 ${rd.monthValue}월 ${rd.dayOfMonth}일" else "날짜를 고르세요",
+                            color = if (rd != null) RunColors.Violet else RunColors.TextDim,
+                            fontSize = 13.sp,
+                        )
+                    }
+                    if (rd != null) {
+                        TextButton(onClick = { f.raceDate = null }) {
+                            Text("지우기", color = RunColors.TextDim, fontSize = 11.sp)
+                        }
+                    }
+                    if (showPicker) {
+                        RaceDatePickerDialog(
+                            initial = rd ?: LocalDate.now().plusMonths(4),
+                            onPick = { f.raceDate = it; showPicker = false },
+                            onDismiss = { showPicker = false },
+                        )
+                    }
+                }
+                if (rd != null) {
+                    val weeks = java.time.temporal.ChronoUnit.WEEKS.between(LocalDate.now(), rd).toInt().coerceAtLeast(0)
+                    val phase = PlanEngine.racePhaseLabel(weeks, f.goalKey)
+                    Hint("오늘부터 ${weeks}주 남았어요. 현재 훈련 단계: $phase")
+                } else {
+                    Hint("대회 날짜를 고르면 단계별 계획(기초 → 빌드업 → 피크 → 테이퍼)을 자동으로 짜줘요. 비워 두면 일반 계획이에요.")
+                }
+            }
         } else {
             Hint("목표 기록 없이 꾸준히 달리는 걸 목표로 해요. 최근 기록을 기준으로 강도를 정해요.")
         }
 
+        Spacer(Modifier.height(12.dp))
+        Label("훈련 강도")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(-1 to "여유롭게", 0 to "기본", 1 to "도전적으로").forEach { (v, lbl) ->
+                Chip(lbl, f.intensityLevel == v) { f.intensityLevel = v }
+            }
+        }
+        Hint(when (f.intensityLevel) {
+            -1 -> "계획이 너무 힘들면 여기서 낮추세요. 롱런과 주간 거리를 20% 줄여요."
+            1  -> "현재 실력보다 10% 더 도전적인 계획이 나와요. 충분한 수면과 영양이 필요해요."
+            else -> "현재 러닝 기록과 주간 거리를 기반으로 적절한 계획을 짜요."
+        })
+
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("한국 계절성 반영", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    if (f.seasonAware) "여름(7~8월) 훈련량 감소 · 봄·가을 소폭 증가"
+                    else "계절 무관하게 일정한 계획으로 진행",
+                    color = RunColors.TextDim, fontSize = 11.sp,
+                )
+            }
+            Switch(
+                checked = f.seasonAware,
+                onCheckedChange = { f.seasonAware = it },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = RunColors.Lime,
+                    checkedTrackColor = RunColors.Lime.copy(alpha = 0.4f),
+                ),
+            )
+        }
+        Hint(if (f.seasonAware)
+            "7~8월 폭염·장마 시기에 주간 거리와 롱런을 최대 28% 줄이고 여름 러닝 조언을 계획에 넣어요."
+        else "실내 트레드밀 위주이거나 계절 영향을 받지 않는 환경이라면 꺼두세요.")
+
         Label("일주일에 몇 번 달리고 싶으세요?")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip("주 3회", f.runDays == 3) { f.runDays = 3 }
-            Chip("주 4회", f.runDays == 4) { f.runDays = 4 }
+            listOf(3, 4, 5, 6, 7).forEach { n -> Chip("주 ${n}회", f.runDays == n) { f.runDays = n } }
         }
-        Hint("주 4회를 고르면 일요일에 가벼운 선택 훈련이 추가돼요. 이 횟수를 넘겨 달리면 쉬어가도록 안내해요.")
+        Hint("주 ${f.runDays}회. 하프·풀코스 목표라면 5~6회를 추천해요. 한 번에 10km 이상보다 여러 날로 분산하면 부상 위험이 줄어요.")
 
-        Label("요즘 일주일에 달리는 거리: ${f.weeklyKm.roundToInt()}km")
-        Slider(
-            value = f.weeklyKm,
-            onValueChange = { f.weeklyKm = it },
-            valueRange = 0f..80f,
-            colors = SliderDefaults.colors(
-                thumbColor = RunColors.Lime,
-                activeTrackColor = RunColors.Lime,
-                inactiveTrackColor = Color.White.copy(alpha = 0.15f),
-            ),
+        Label("요즘 일주일에 달리는 거리 (km)")
+        // 슬라이더 → 숫자 직접 입력 (80km 이상도 지원)
+        var weeklyKmText by remember { mutableStateOf(if (f.weeklyKm > 0f) f.weeklyKm.roundToInt().toString() else "") }
+        OutlinedTextField(
+            value = weeklyKmText,
+            onValueChange = { v ->
+                weeklyKmText = v.filter { it.isDigit() }.take(4)
+                weeklyKmText.toIntOrNull()?.let { f.weeklyKm = it.toFloat() }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            suffix = { Text("km", color = RunColors.TextDim) },
+            placeholder = { Text("예: 30", color = RunColors.TextDim, fontSize = 14.sp) },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true,
+            colors = fieldColors(),
         )
-        Hint("러닝 기록이 충분히 쌓이기 전까지만 기준으로 써요. 처음 시작이라면 0~10km 정도로 두세요.")
+        Hint("러닝 기록이 충분히 쌓이기 전까지만 기준으로 써요. 처음 시작이라면 0~10km, 주 5회 이상 달린다면 실제 주간 거리를 입력하세요.")
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -313,6 +431,12 @@ fun OnboardingScreen(prefs: Prefs, samsung: SamsungRepo, onDone: () -> Unit) {
     val form = remember { ProfileForm(UserProfile.data) }
     var error by remember { mutableStateOf<String?>(null) }
     var samsungMsg by remember { mutableStateOf("") }
+    var hcMsg by remember { mutableStateOf("") }
+    var source by remember { mutableStateOf(prefs.dataSource) }
+    val hcLauncher = rememberLauncherForActivityResult(PermissionController.createRequestPermissionResultContract()) { granted ->
+        val ok = granted.contains(HealthPermission.getReadPermission(ExerciseSessionRecord::class))
+        hcMsg = if (ok) "연결됐어요 ✅ (허용 ${granted.size}개)" else "허용하지 않았어요. 나중에 설정 탭에서 다시 시도할 수 있어요"
+    }
     var healthMsg by remember { mutableStateOf("") }
     var notifMsg by remember { mutableStateOf("") }
     var reminderOn by remember { mutableStateOf(prefs.reminderOn) }
@@ -380,7 +504,7 @@ fun OnboardingScreen(prefs: Prefs, samsung: SamsungRepo, onDone: () -> Unit) {
                             Spacer(Modifier.height(6.dp))
                             listOf(
                                 "내 정보와 건강 데이터는 이 폰 안에서만 저장하고 계산해요. 서버로 보내지 않아요.",
-                                "읽는 데이터: 러닝·걷기 기록, 수면, 심박, 에너지 점수, 피부 온도 (모두 읽기만 하고 수정하지 않아요).",
+                                "읽는 데이터: 러닝·걷기 기록, 수면, 심박 (삼성 헬스에서는 에너지 점수, 피부 온도도). 삼성 헬스 또는 Health Connect에서 읽기만 하고 수정하지 않아요. 원하면 '신체' 탭에서 체중·키·체지방·골격근량도 가져올 수 있고, 가져오면 내 정보의 키·체중도 새 측정값으로 자동 갱신돼요(선택).",
                                 "Claude API 키를 직접 입력해서 AI 평가를 켜면, 그때만 러닝 기록 요약·최근 이력과 나이·키·체중·목표 같은 기본 정보가 Anthropic 서버로 전송돼요. 이름과 수면·심박 같은 건강 수치는 보내지 않고, 사용량만큼 본인에게 요금이 부과돼요.",
                                 "이 앱은 일반적인 운동 가이드이고 의료 조언이 아니에요. 가슴 통증, 어지러움, 비정상적인 심박이 있으면 훈련보다 전문가 상담이 먼저예요.",
                                 "각 권한은 다음 단계에서 하나씩 설명하고 허용 여부를 직접 고르게 해요.",
@@ -410,53 +534,92 @@ fun OnboardingScreen(prefs: Prefs, samsung: SamsungRepo, onDone: () -> Unit) {
                     3 -> {
                         Text("데이터 연결", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
                         Text(
-                            "삼성 헬스에서 러닝 기록과 건강 신호를 읽어 와요. 각 버튼을 누르면 삼성 헬스의 허용 창이 떠요. 건너뛰어도 되고, 나중에 설정 탭에서 다시 할 수 있어요.",
+                            "러닝 기록과 건강 신호를 어디서 읽어 올지 고르세요. 각 버튼을 누르면 허용 창이 떠요. 건너뛰어도 되고, 나중에 설정 탭에서 바꿀 수 있어요.",
                             fontSize = 12.sp, color = RunColors.TextDim, lineHeight = 18.sp,
                         )
-                        GlassCard(Modifier.fillMaxWidth()) {
-                            SectionTitle("① 러닝·걷기 기록")
-                            Spacer(Modifier.height(4.dp))
-                            Hint("삼성 헬스 앱이 설치되어 있고 로그인되어 있어야 해요. 거리, 페이스, 심박, 케이던스, 구간 기록을 읽어요.")
-                            Spacer(Modifier.height(8.dp))
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        samsungMsg = try {
-                                            if (samsung.requestPermission(context as Activity)) "연결됐어요 ✅" else "허용하지 않았어요. 나중에 설정 탭에서 다시 시도할 수 있어요"
-                                        } catch (e: Throwable) {
-                                            "연결하지 못했어요: ${e::class.java.simpleName}. 삼성 헬스 앱을 최신으로 업데이트했는지 확인해 주세요. " +
-                                                "그래도 안 되면 이 앱이 아직 삼성 헬스 연동 등록을 마치지 않은 버전일 수 있어요."
-                                        }
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = RunColors.Lime, contentColor = RunColors.Bg),
-                            ) { Text("삼성 헬스 연결하기", fontWeight = FontWeight.Bold) }
-                            if (samsungMsg.isNotEmpty()) {
-                                Spacer(Modifier.height(6.dp))
-                                Text(samsungMsg, fontSize = 11.sp, color = Color.White)
+                        Label("데이터를 가져올 곳")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Chip("삼성 헬스", source == DataSourceKind.SAMSUNG) {
+                                source = DataSourceKind.SAMSUNG
+                                prefs.dataSource = source
+                            }
+                            Chip("Health Connect (가민 등)", source == DataSourceKind.HEALTH_CONNECT) {
+                                source = DataSourceKind.HEALTH_CONNECT
+                                prefs.dataSource = source
                             }
                         }
-                        GlassCard(Modifier.fillMaxWidth()) {
-                            SectionTitle("② 수면·심박·에너지 점수 (선택)")
-                            Spacer(Modifier.height(4.dp))
-                            Hint("오늘 컨디션을 계산하는 데 써요. 허용하지 않으면 러닝 기록만으로 계획을 만들어요.")
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedButton(
-                                onClick = {
-                                    scope.launch {
-                                        healthMsg = try {
-                                            val hd = HealthDaily(context.applicationContext)
-                                            val n = hd.request(context as Activity)
-                                            "허용 ${n}개 / 전체 ${hd.total}개 (수면, 심박, 에너지 점수, 피부 온도)"
-                                        } catch (e: Throwable) {
-                                            "허용하지 못했어요: ${e::class.java.simpleName}"
+                        if (source == DataSourceKind.SAMSUNG) {
+                            GlassCard(Modifier.fillMaxWidth()) {
+                                SectionTitle("① 러닝·걷기 기록")
+                                Spacer(Modifier.height(4.dp))
+                                Hint("삼성 헬스 앱이 설치되어 있고 로그인되어 있어야 해요. 거리, 페이스, 심박, 케이던스, 구간 기록을 읽어요.")
+                                Spacer(Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            samsungMsg = try {
+                                                if (samsung.requestPermission(context as Activity)) "연결됐어요 ✅" else "허용하지 않았어요. 나중에 설정 탭에서 다시 시도할 수 있어요"
+                                            } catch (e: Throwable) {
+                                                "연결하지 못했어요: ${e::class.java.simpleName}. 삼성 헬스 앱을 최신으로 업데이트했는지 확인해 주세요. " +
+                                                    "그래도 안 되면 이 앱이 아직 삼성 헬스 연동 등록을 마치지 않은 버전일 수 있어요."
+                                            }
                                         }
-                                    }
-                                },
-                            ) { Text("건강 데이터 허용하기", color = RunColors.Lime) }
-                            if (healthMsg.isNotEmpty()) {
-                                Spacer(Modifier.height(6.dp))
-                                Text(healthMsg, fontSize = 11.sp, color = Color.White)
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = RunColors.Lime, contentColor = RunColors.Bg),
+                                ) { Text("삼성 헬스 연결하기", fontWeight = FontWeight.Bold) }
+                                if (samsungMsg.isNotEmpty()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(samsungMsg, fontSize = 11.sp, color = Color.White)
+                                }
+                            }
+                            GlassCard(Modifier.fillMaxWidth()) {
+                                SectionTitle("② 수면·심박·에너지 점수 (선택)")
+                                Spacer(Modifier.height(4.dp))
+                                Hint("오늘 컨디션을 계산하는 데 써요. 허용하지 않으면 러닝 기록만으로 계획을 만들어요.")
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            healthMsg = try {
+                                                val hd = HealthDaily(context.applicationContext)
+                                                val n = hd.request(context as Activity)
+                                                "허용 ${n}개 / 전체 ${hd.total}개 (수면, 심박, 에너지 점수, 피부 온도)"
+                                            } catch (e: Throwable) {
+                                                "허용하지 못했어요: ${e::class.java.simpleName}"
+                                            }
+                                        }
+                                    },
+                                ) { Text("건강 데이터 허용하기", color = RunColors.Lime) }
+                                if (healthMsg.isNotEmpty()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(healthMsg, fontSize = 11.sp, color = Color.White)
+                                }
+                            }
+                        } else {
+                            GlassCard(Modifier.fillMaxWidth()) {
+                                SectionTitle("Health Connect 연결")
+                                Spacer(Modifier.height(4.dp))
+                                Hint(
+                                    "가민 커넥트, 삼성 헬스 등에서 Health Connect로 기록을 보내도록 먼저 설정해 주세요. " +
+                                        "이 앱은 Health Connect에서 운동, 심박, 거리, 속도, 걸음 수, 수면을 읽기만 해요. " +
+                                        "앱마다 넣어 주는 항목이 달라서 구간별 페이스나 케이던스가 없을 수 있어요."
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        if (HealthConnectRepo.isAvailable(context)) {
+                                            hcLauncher.launch(HealthConnectRepo.PERMISSIONS)
+                                        } else {
+                                            hcMsg = "Health Connect를 설치하거나 업데이트한 뒤 다시 눌러 주세요"
+                                            runCatching { context.startActivity(HealthConnectRepo.storeIntent()) }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = RunColors.Lime, contentColor = RunColors.Bg),
+                                ) { Text("Health Connect 허용하기", fontWeight = FontWeight.Bold) }
+                                if (hcMsg.isNotEmpty()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(hcMsg, fontSize = 11.sp, color = Color.White)
+                                }
                             }
                         }
                     }
@@ -546,4 +709,25 @@ fun OnboardingScreen(prefs: Prefs, samsung: SamsungRepo, onDone: () -> Unit) {
             }
         }
     }
+}
+
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RaceDatePickerDialog(initial: LocalDate, onPick: (LocalDate) -> Unit, onDismiss: () -> Unit) {
+    val initMs = initial.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val state = rememberDatePickerState(initialSelectedDateMillis = initMs)
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                state.selectedDateMillis?.let { ms ->
+                    val d = java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+                    onPick(d)
+                }
+            }) { Text("확인") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
+    ) { DatePicker(state = state) }
 }

@@ -1,5 +1,7 @@
 package io.github.jihoon0501.runcoach
 
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -77,9 +79,15 @@ fun PlanScreen(
     note: PlanNote? = null,
     onShowNote: () -> Unit = {},
     onShareCalendar: () -> Unit = {},
+    onDisableCalendar: () -> Unit = {},
     walks: List<WalkSession> = emptyList(),
+    readiness: Readiness? = null,
+    cross: List<ActivitySession> = emptyList(),
+    onRevert: (PlanItem) -> Unit = {},
 ) {
     val matches = remember(plan, runs) { PlanEngine.match(plan, runs) }
+    val proposals = remember(plan, runs, today) { PlanEngine.proposals(plan, runs, today) }
+    val fatigueNow = remember(runs, walks, readiness, today, cross) { PlanEngine.fatigueNow(runs, today, walks, readiness, cross) }
     val walkDays = remember(walks) { PlanEngine.walkDays(walks) }
     var listMode by rememberSaveable { mutableStateOf(false) }
     var monthIso by rememberSaveable { mutableStateOf(YearMonth.from(today).toString()) }
@@ -110,8 +118,23 @@ fun PlanScreen(
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("훈련 계획", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, modifier = Modifier.weight(1f))
-                TextButton(onClick = onShareCalendar, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-                    Text("캘린더 공유", color = RunColors.Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                // 캘린더 버튼: 공유된 항목이 있으면 "끄기·삭제" 옵션 메뉴, 없으면 "공유" 버튼
+                var showCalMenu by remember { mutableStateOf(false) }
+                Box {
+                    TextButton(
+                        onClick = { showCalMenu = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) { Text("📅 캘린더", color = RunColors.Violet, fontWeight = FontWeight.Bold, fontSize = 12.sp) }
+                    DropdownMenu(expanded = showCalMenu, onDismissRequest = { showCalMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("캘린더에 공유 / 갱신") },
+                            onClick = { showCalMenu = false; onShareCalendar() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("공유된 항목 모두 삭제", color = RunColors.Pink) },
+                            onClick = { showCalMenu = false; onDisableCalendar() },
+                        )
+                    }
                 }
                 TextButton(onClick = onRegenerate, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
                     Text("새 계획", color = RunColors.Lime, fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -120,7 +143,10 @@ fun PlanScreen(
         }
 
         if (note != null) {
-            item { PlanNoteCard(note, onShowNote) }
+            item { PlanNoteCard(note, fatigueNow, onShowNote) }
+        }
+        if (proposals.isNotEmpty()) {
+            item { ProposalCard(proposals, onRegenerate) }
         }
 
         item { AchievementCard(ym, ach) }
@@ -177,7 +203,7 @@ fun PlanScreen(
                     ) { m ->
                         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             CalendarGrid(m, plan, matches, runs, walkDays, today, selected) { selectedIso = it.toString() }
-                            DayDetailCard(selected, plan, matches, runs, walkDays, today) { rescheduleTarget = it }
+                            DayDetailCard(selected, plan, matches, runs, walkDays, today, onRevert = onRevert) { rescheduleTarget = it }
                         }
                     }
                 }
@@ -201,7 +227,7 @@ fun PlanScreen(
                     }
                 }
                 items(list, key = { it.id }) { p ->
-                    PlanListCard(p, matches[p.id], walkDays[p.date], today) { rescheduleTarget = it }
+                    PlanListCard(p, matches[p.id], walkDays[p.date], today, onRevert = onRevert) { rescheduleTarget = it }
                 }
             }
         }
@@ -423,6 +449,7 @@ private fun DayDetailCard(
     runs: List<RunSession>,
     walkDays: Map<LocalDate, WalkDay>,
     today: LocalDate,
+    onRevert: (PlanItem) -> Unit = {},
     onReschedule: (PlanItem) -> Unit,
 ) {
     val item = plan.firstOrNull { it.date == date }
@@ -446,7 +473,7 @@ private fun DayDetailCard(
         } else {
             DayBody(
                 item, matches[item.id], today, showHeader = true, dateText = dateLabel(date, today),
-                walkDay = walkDay, onReschedule = onReschedule,
+                walkDay = walkDay, onReschedule = onReschedule, onRevert = onRevert,
             )
         }
     }
@@ -503,6 +530,7 @@ private fun DayBody(
     showHeader: Boolean,
     dateText: String = "",
     walkDay: WalkDay? = null,
+    onRevert: (PlanItem) -> Unit = {},
     onReschedule: (PlanItem) -> Unit,
 ) {
     val status = PlanEngine.status(item, run != null, today, run == null && walkDay?.recovery == true)
@@ -523,6 +551,27 @@ private fun DayBody(
         )
         if (item.rescheduled) {
             Text("📅 날짜가 변경된 훈련이에요", color = RunColors.Orange, fontSize = 10.sp)
+        }
+        if (PlanEngine.isAdjusted(item)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(RunColors.Orange.copy(alpha = 0.14f))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("⚡ 조정된 훈련", color = RunColors.Orange, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    Text(PlanEngine.adjReason(item), color = RunColors.TextDim, fontSize = 10.sp, lineHeight = 14.sp)
+                }
+                OutlinedButton(
+                    onClick = { onRevert(item) },
+                    modifier = Modifier.height(30.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                ) { Text("원래대로", color = RunColors.Lime, fontSize = 11.sp) }
+            }
         }
         Spacer(Modifier.height(4.dp))
         item.tips.forEach {
@@ -635,6 +684,7 @@ private fun PlanListCard(
     run: RunSession?,
     walkDay: WalkDay?,
     today: LocalDate,
+    onRevert: (PlanItem) -> Unit = {},
     onReschedule: (PlanItem) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(item.date == today) }
@@ -691,7 +741,7 @@ private fun PlanListCard(
         }
         AnimatedVisibility(expanded) {
             Column(Modifier.padding(top = 8.dp)) {
-                DayBody(item, run, today, showHeader = false, walkDay = walkDay, onReschedule = onReschedule)
+                DayBody(item, run, today, showHeader = false, walkDay = walkDay, onReschedule = onReschedule, onRevert = onRevert)
             }
         }
     }
@@ -705,9 +755,13 @@ private fun levelColor(level: String): Color = when (level) {
     else -> RunColors.Lime
 }
 
-/** 가장 최근에 계획을 조정한 이유를 다시 볼 수 있는 슬림 카드 */
+/**
+ * 가장 최근에 계획을 조정한 이유를 다시 볼 수 있는 슬림 카드.
+ * 위쪽 숫자는 계획을 만들던 당시의 피로도(그때의 값), 아래쪽은 지금 기록과 컨디션으로 계산한 피로도다.
+ * 피로도는 높을수록 피곤하다 (홈의 컨디션은 높을수록 좋음).
+ */
 @Composable
-fun PlanNoteCard(note: PlanNote, onClick: () -> Unit) {
+fun PlanNoteCard(note: PlanNote, now: PlanEngine.FatigueNow?, onClick: () -> Unit) {
     val c = levelColor(note.level)
     GlassCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -717,7 +771,7 @@ fun PlanNoteCard(note: PlanNote, onClick: () -> Unit) {
                     .background(c.copy(alpha = 0.18f))
                     .padding(horizontal = 8.dp, vertical = 2.dp)
             ) {
-                Text("피로도 ${note.score} · ${note.level}", color = c, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("당시 피로도 ${note.score} · ${note.level}", color = c, fontSize = 10.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
@@ -728,6 +782,46 @@ fun PlanNoteCard(note: PlanNote, onClick: () -> Unit) {
                 )
             }
             Text("이유 보기 ›", fontSize = 10.sp, color = RunColors.Lime)
+        }
+        // 계절 경고 배너 (여름·겨울 위험 시기)
+        if (note.seasonWarning != null) {
+            val isWarn = note.seasonWarnLevel == "위험"
+            val bannerColor = if (isWarn) Color(0xFFFF4500) else Color(0xFFFF9F43)
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(bannerColor.copy(alpha = 0.18f))
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(if (isWarn) "⚠️" else "☀️", fontSize = 14.sp)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    note.seasonWarning,
+                    fontSize = 10.5.sp, color = bannerColor, lineHeight = 15.sp,
+                )
+            }
+        }
+        if (now != null) {
+            val nc = levelColor(now.level)
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(nc.copy(alpha = 0.18f))
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text("지금 피로도 ${now.score} · ${now.level}", color = nc, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "러닝 ${now.running}" + (if (now.healthAdd > 0) " + 건강 신호 ${now.healthAdd}" else "") + " · 높을수록 피곤해요",
+                    fontSize = 10.sp, color = RunColors.TextDim,
+                )
+            }
         }
     }
 }
@@ -788,11 +882,11 @@ fun PlanNoteDialog(note: PlanNote, claudeText: String?, loading: Boolean, onShar
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(14.dp), color = RunColors.Violet, strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
-                        Text("🤖 Claude 코치가 검토하는 중...", fontSize = 11.sp, color = RunColors.TextDim)
+                        Text("✨ Claude 코치가 검토하는 중...", fontSize = 11.sp, color = RunColors.TextDim)
                     }
                 }
                 if (claudeText != null) {
-                    NoteSection("🤖 Claude 코치 의견", listOf(claudeText))
+                    NoteSection("✨ Claude 코치 의견", listOf(claudeText))
                 }
             }
         },
@@ -866,5 +960,27 @@ private fun RescheduleDialog(
         ) {
             DatePicker(state = state)
         }
+    }
+}
+@Composable
+private fun ProposalCard(lines: List<String>, onRegenerate: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(RunColors.Orange.copy(alpha = 0.12f))
+            .padding(12.dp),
+    ) {
+        Text("🔎 계획 점검", color = RunColors.Orange, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        lines.forEach {
+            Text(it, color = RunColors.TextDim, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 4.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = onRegenerate,
+            modifier = Modifier.height(32.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = RunColors.Lime, contentColor = RunColors.Bg),
+        ) { Text("새 계획 만들기", fontWeight = FontWeight.Bold, fontSize = 12.sp) }
     }
 }

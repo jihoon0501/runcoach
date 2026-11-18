@@ -1,0 +1,41 @@
+import io.github.jihoon0501.runcoach.ChartMath
+var fails = 0
+fun check(n: String, c: Boolean, e: String = "") { println((if (c) "OK   " else "FAIL ") + n + (if (e.isNotEmpty()) "  [$e]" else "")); if (!c) fails++ }
+fun main() {
+    val a = ChartMath.niceAxis(63.2f, 66.8f)
+    check("체중 63.2~66.8 → 63~67, 1kg 간격", a.lo == 63f && a.hi == 67f && a.ticks == listOf(63f, 64f, 65f, 66f, 67f), a.ticks.toString())
+    check("라벨은 정수", a.label(65f) == "65")
+    val k = ChartMath.niceAxis(0f, 31f, zeroBased = true)
+    check("주간 거리 0~31 → 0~40, 10 간격", k.lo == 0f && k.hi == 40f && k.ticks == listOf(0f, 10f, 20f, 30f, 40f), k.ticks.toString())
+    val f = ChartMath.niceAxis(20.1f, 22.9f)
+    check("BMI 20.1~22.9 → 20~23", f.lo == 20f && f.hi == 23f, f.ticks.toString())
+    val g = ChartMath.niceAxis(17.4f, 19.2f)
+    check("체지방 17.4~19.2 → 소수 간격이면 한 자리 라벨", g.ticks.size in 3..7 && g.lo <= 17.4f && g.hi >= 19.2f && (g.step < 1f || g.step == 1f), "${g.ticks} step=${g.step} 라벨=${g.label(g.ticks[1])}")
+    val same = ChartMath.niceAxis(65f, 65f)
+    check("값이 하나여도 눈금이 생김", same.hi > same.lo && same.ticks.size >= 2, same.ticks.toString())
+    val big = ChartMath.niceAxis(0f, 0f, zeroBased = true)
+    check("거리가 모두 0이어도 0~1 눈금", big.hi >= 1f && big.lo == 0f, big.ticks.toString())
+    check("값은 항상 범위 안", listOf(63.2f, 66.8f).all { it >= a.lo && it <= a.hi })
+    check("frac: 맨 아래 0, 맨 위 1", a.frac(63f) == 0f && a.frac(67f) == 1f && a.frac(65f) == 0.5f)
+    val xs = ChartMath.xPositions(listOf(100L, 110L, 140L), 300f)
+    check("날짜 간격에 비례한 가로 위치", xs == listOf(0f, 75f, 300f), xs.toString())
+    check("가장 가까운 점 찾기", ChartMath.nearestIndex(xs, 80f) == 1 && ChartMath.nearestIndex(xs, 250f) == 2 && ChartMath.nearestIndex(xs, -10f) == 0)
+    check("점이 하루뿐이면 가운데", ChartMath.xPositions(listOf(5L, 5L), 200f) == listOf(100f, 100f))
+    check("막대 터치 위치 → 칸 번호", ChartMath.slotIndex(0f, 13, 260f) == 0 && ChartMath.slotIndex(259f, 13, 260f) == 12 && ChartMath.slotIndex(135f, 13, 260f) == 6)
+    check("막대 가운데", ChartMath.slotCenter(0, 10, 100f) == 5f)
+    check("빈 목록은 -1", ChartMath.nearestIndex(emptyList(), 3f) == -1 && ChartMath.slotIndex(5f, 0, 100f) == -1)
+    // 앱이 꺼지던 원인: 단위 '%p'가 서식 문자열에 섞이던 문제
+    check("변화량 글자: 체지방 %p 단위도 안전", ChartMath.deltaText("체지방", 18.1f, 18.4f, "%p") == "체지방 -0.3%p", ChartMath.deltaText("체지방", 18.1f, 18.4f, "%p"))
+    check("변화량 글자: 증가는 + 부호", ChartMath.deltaText("골격근", 30.2f, 30.0f, "kg") == "골격근 +0.2kg")
+    check("변화량 글자: BMI는 단위 없음", ChartMath.deltaText("BMI", 22.0f, 22.0f, "") == "BMI +0.0")
+    check("단위에 %s %d %% 가 있어도 안전", listOf("%s", "%d", "%%", "%.1f").all { runCatching { ChartMath.deltaText("x", 1f, 2f, it) }.isSuccess })
+    // 활동 달력
+    check("달력 단계: 0km=0, 최대의 20%=1, 40%=2, 60%=3, 100%=4", listOf(0.0, 2.0, 4.0, 6.0, 10.0).map { ChartMath.heatLevel(it, 10.0) } == listOf(0, 1, 2, 3, 4))
+    check("달력 단계: 최대 거리가 0이면 전부 0", ChartMath.heatLevel(5.0, 0.0) == 0)
+    val cell = ChartMath.heatCell(300f, 26, 2f)
+    check("달력 칸 크기: 26열이 가로에 딱 맞음", Math.abs(cell * 26 + 2f * 25 - 300f) < 0.01f, "cell=$cell")
+    check("달력 터치: 첫 칸과 마지막 칸", ChartMath.heatHit(1f, 1f, 10f, 2f, 26, 7) == (0 to 0) && ChartMath.heatHit(12f * 25 + 5f, 12f * 6 + 5f, 10f, 2f, 26, 7) == (25 to 6))
+    check("달력 밖을 누르면 null", ChartMath.heatHit(-1f, 5f, 10f, 2f, 26, 7) == null && ChartMath.heatHit(12f * 26 + 1f, 5f, 10f, 2f, 26, 7) == null && ChartMath.heatHit(5f, 12f * 7 + 1f, 10f, 2f, 26, 7) == null)
+    check("범위 안 위치", ChartMath.position(65f, 60f, 70f) == 0.5f && ChartMath.position(50f, 60f, 70f) == 0f && ChartMath.position(65f, 65f, 65f) == 0.5f)
+    println(if (fails == 0) "\n전체 통과" else "\n실패 $fails 개")
+}
